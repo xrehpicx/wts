@@ -195,11 +195,30 @@ func (c *Client) CapturePane(ctx context.Context, session, window string, lines 
 }
 
 func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string) (string, error) {
-	output, err := c.runner.Run(ctx, c.bin, "display-message", "-p", "-t", session+":"+window, "#{pane_current_command}")
+	// Get the pane PID and check if it has child processes.
+	// send-keys runs commands as children of the pane shell, so if the
+	// shell has no children, the process has exited.
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_pid}")
 	if err != nil {
-		return "", fmt.Errorf("pane command for %q: %w", window, err)
+		return "", fmt.Errorf("pane pid for %q: %w", window, err)
 	}
-	return strings.TrimSpace(output), nil
+	pid := strings.TrimSpace(output)
+	if i := strings.IndexByte(pid, '\n'); i >= 0 {
+		pid = pid[:i]
+	}
+	if pid == "" {
+		return "", nil
+	}
+	// Check if the pane shell has any child processes.
+	children, err := c.runner.Run(ctx, "pgrep", "-P", pid)
+	if err != nil {
+		// pgrep exits 1 when no children found — that means process exited.
+		return "shell", nil
+	}
+	if strings.TrimSpace(children) == "" {
+		return "shell", nil
+	}
+	return "running", nil
 }
 
 func (c *Client) Attach(ctx context.Context, session, window string) error {

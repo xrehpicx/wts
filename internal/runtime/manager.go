@@ -406,17 +406,12 @@ func (m *Manager) isRunning(ctx context.Context, wt *gitwt.Worktree) (bool, erro
 	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Dir))
 }
 
-// shellNames are the common shell base names that indicate the process has
-// exited and the pane fell back to an interactive prompt.
-var shellNames = map[string]bool{
-	"sh": true, "bash": true, "zsh": true, "fish": true,
-	"dash": true, "ksh": true, "csh": true, "tcsh": true,
-}
-
 func (m *Manager) isProcessExited(ctx context.Context, wt *gitwt.Worktree) bool {
 	cmd, err := m.backend.PaneCurrentCommand(ctx, m.session, tmux.WindowName(wt.Dir))
 	if err != nil || cmd == "" {
 		return false
 	}
-	return shellNames[cmd]
+	// PaneCurrentCommand returns "shell" when the pane shell has no children
+	// (i.e. the process exited), or "running" when children exist.
+	return cmd == "shell"
 }
