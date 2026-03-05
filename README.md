@@ -30,6 +30,21 @@ No extra `~/.workswitch/state.yaml` file is used.
 go install github.com/xrehpicx/wts@latest
 ```
 
+To install a specific version:
+
+```bash
+go install github.com/xrehpicx/wts@v0.2.0
+```
+
+To update to the latest release, re-run the install command above.
+
+Verify:
+
+```bash
+wts version
+# wts 0.2.0 (03e4f59)
+```
+
 ## Quick Start
 
 ```bash
@@ -138,6 +153,33 @@ make help
 make airflow
 make run ARGS="tui"
 make install
+```
+
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
+
+| Bump    | When                                                                 | Example                                    |
+|---------|----------------------------------------------------------------------|--------------------------------------------|
+| `PATCH` | Bug fixes, lint fixes, docs — no behavior change                     | `v0.2.0` → `v0.2.1`                       |
+| `MINOR` | New features, new commands, UX improvements — backwards compatible   | `v0.2.1` → `v0.3.0`                       |
+| `MAJOR` | Breaking changes to CLI flags, config format, or removed commands    | `v0.3.0` → `v1.0.0`                       |
+
+### Releasing a new version
+
+1. Update `version` in `main.go`
+2. Add a section to `CHANGELOG.md`
+3. Commit, tag, and push:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Users update with:
+
+```bash
+go install github.com/xrehpicx/wts@latest
 ```
 
 ## Project docs
