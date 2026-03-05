@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -44,9 +46,58 @@ type tuiModel struct {
 	idx     int
 	width   int
 	height  int
+	keys    tuiKeyMap
+	help    help.Model
+	showAll bool
 	message string
 	rows    []runtime.StatusRow
 	styles  tuiStyles
+}
+
+type tuiKeyMap struct {
+	Next     key.Binding
+	Prev     key.Binding
+	Switch   key.Binding
+	Restart  key.Binding
+	Stop     key.Binding
+	Add      key.Binding
+	Remove   key.Binding
+	ProcPrev key.Binding
+	ProcNext key.Binding
+	GroupSet key.Binding
+	GroupClr key.Binding
+	Help     key.Binding
+	Quit     key.Binding
+}
+
+func newTUIKeyMap() tuiKeyMap {
+	return tuiKeyMap{
+		Next:     key.NewBinding(key.WithKeys("n", "down"), key.WithHelp("n", "next")),
+		Prev:     key.NewBinding(key.WithKeys("p", "up"), key.WithHelp("p", "prev")),
+		Switch:   key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s", "switch")),
+		Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
+		Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
+		Add:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
+		Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
+		ProcPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "prev process")),
+		ProcNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next process")),
+		GroupSet: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "group=process")),
+		GroupClr: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "clear group")),
+		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
+		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	}
+}
+
+func (k tuiKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.Help, k.Quit}
+}
+
+func (k tuiKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop},
+		{k.Add, k.Remove, k.ProcPrev, k.ProcNext},
+		{k.GroupSet, k.GroupClr, k.Help, k.Quit},
+	}
 }
 
 func newTUIModel(rc *runtimeContext) *tuiModel {
@@ -57,7 +108,15 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 	if idx >= len(rc.repo.Worktrees) {
 		idx = max(0, len(rc.repo.Worktrees)-1)
 	}
-	m := &tuiModel{rc: rc, idx: idx, styles: newTUIStyles()}
+	helpModel := help.New()
+	helpModel.ShowAll = false
+	m := &tuiModel{
+		rc:     rc,
+		idx:    idx,
+		keys:   newTUIKeyMap(),
+		help:   helpModel,
+		styles: newTUIStyles(),
+	}
 	m.refreshStatus()
 	return m
 }
@@ -145,30 +204,33 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
+		switch {
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-		case "j", "down", "l", "right", "n":
+		case key.Matches(msg, m.keys.Help):
+			m.showAll = !m.showAll
+			m.help.ShowAll = m.showAll
+		case key.Matches(msg, m.keys.Next):
 			m.next()
-		case "k", "up", "h", "left", "p":
+		case key.Matches(msg, m.keys.Prev):
 			m.prev()
-		case "enter", "s":
+		case key.Matches(msg, m.keys.Switch):
 			m.switchCurrent()
-		case "r":
+		case key.Matches(msg, m.keys.Restart):
 			m.restartCurrent()
-		case "x":
+		case key.Matches(msg, m.keys.Stop):
 			m.stopCurrent()
-		case "a":
+		case key.Matches(msg, m.keys.Add):
 			m.addCurrentDir()
-		case "d":
+		case key.Matches(msg, m.keys.Remove):
 			m.removeCurrent()
-		case "g":
+		case key.Matches(msg, m.keys.GroupSet):
 			m.applyProcessGroup()
-		case "u":
+		case key.Matches(msg, m.keys.GroupClr):
 			m.clearGroupOverride()
-		case "]":
+		case key.Matches(msg, m.keys.ProcNext):
 			m.cycleProcess(1)
-		case "[":
+		case key.Matches(msg, m.keys.ProcPrev):
 			m.cycleProcess(-1)
 		}
 	}
@@ -287,7 +349,7 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 			truncateLine(group, 12),
 		)
 		plainLine = truncateLine(plainLine, maxTextWidth)
-		line := plainLine
+		var line string
 		if i == m.idx {
 			line = m.styles.selectedRow.Render(plainLine)
 		} else {
@@ -375,19 +437,12 @@ func (m *tuiModel) renderPanel(title string, lines []string, width, height int, 
 }
 
 func (m *tuiModel) renderFooter(width int) string {
-	shortcuts := []string{
-		m.keycap("n/p") + " next/prev",
-		m.keycap("s") + " switch",
-		m.keycap("r") + " restart",
-		m.keycap("x") + " stop",
-		m.keycap("a") + " add",
-		m.keycap("d") + " remove",
-		m.keycap("[") + "/" + m.keycap("]") + " process",
-		m.keycap("g/u") + " group set/clear",
-		m.keycap("q") + " quit",
+	m.help.Width = max(20, width)
+	helpView := m.help.ShortHelpView(m.keys.ShortHelp())
+	if m.showAll {
+		helpView = m.help.FullHelpView(m.keys.FullHelp())
 	}
-	line1 := truncateLine(strings.Join(shortcuts[:5], "   "), width)
-	line2 := truncateLine(strings.Join(shortcuts[5:], "   "), width)
+	helpView = truncateLine(helpView, width)
 
 	msg := ""
 	if m.message != "" {
@@ -398,15 +453,11 @@ func (m *tuiModel) renderFooter(width int) string {
 		}
 	}
 
-	parts := []string{m.styles.footer.Render(line1), m.styles.footer.Render(line2)}
+	parts := []string{m.styles.footer.Render(helpView)}
 	if msg != "" {
 		parts = append(parts, msg)
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(parts, "\n"))
-}
-
-func (m *tuiModel) keycap(s string) string {
-	return m.styles.key.Render(s)
 }
 
 func (m *tuiModel) next() {
@@ -633,13 +684,6 @@ func truncateLine(s string, width int) string {
 
 func runeLen(s string) int {
 	return len([]rune(s))
-}
-
-func boolWord(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
 }
 
 func indexOfWorktree(repo *state.RepoState, name string) (int, bool) {
