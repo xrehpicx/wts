@@ -11,3 +11,7 @@ coverage.out
 
 # Local workswitch runtime config
 .workswitch.yaml
+
+# Local agent metadata
+.agents/
+skills-lock.json
