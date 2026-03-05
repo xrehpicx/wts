@@ -7,17 +7,39 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xrehpicx/wts/internal/model"
 	"github.com/xrehpicx/wts/internal/runtime"
 	"github.com/xrehpicx/wts/internal/state"
 )
 
+type tuiStyles struct {
+	header       lipgloss.Style
+	headerSub    lipgloss.Style
+	panelTitle   lipgloss.Style
+	panelBorder  lipgloss.Style
+	selectedRow  lipgloss.Style
+	row          lipgloss.Style
+	badgeRunning lipgloss.Style
+	badgeStopped lipgloss.Style
+	badgeActive  lipgloss.Style
+	metaLabel    lipgloss.Style
+	metaValue    lipgloss.Style
+	footer       lipgloss.Style
+	error        lipgloss.Style
+	notice       lipgloss.Style
+	key          lipgloss.Style
+}
+
 type tuiModel struct {
 	rc      *runtimeContext
 	idx     int
+	width   int
+	height  int
 	message string
 	rows    []runtime.StatusRow
+	styles  tuiStyles
 }
 
 func newTUIModel(rc *runtimeContext) *tuiModel {
@@ -28,15 +50,62 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 	if idx >= len(rc.repo.Worktrees) {
 		idx = max(0, len(rc.repo.Worktrees)-1)
 	}
-	m := &tuiModel{rc: rc, idx: idx}
+	m := &tuiModel{rc: rc, idx: idx, styles: newTUIStyles()}
 	m.refreshStatus()
 	return m
+}
+
+func newTUIStyles() tuiStyles {
+	return tuiStyles{
+		header: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("25")).
+			Padding(0, 1),
+		headerSub: lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
+		panelTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("110")),
+		panelBorder: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(0, 1),
+		selectedRow: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("62")).
+			Bold(true),
+		row: lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
+		badgeRunning: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("22")).
+			Background(lipgloss.Color("120")).
+			Padding(0, 1),
+		badgeStopped: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("52")).
+			Background(lipgloss.Color("217")).
+			Padding(0, 1),
+		badgeActive: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("17")).
+			Background(lipgloss.Color("159")).
+			Padding(0, 1),
+		metaLabel: lipgloss.NewStyle().Foreground(lipgloss.Color("68")),
+		metaValue: lipgloss.NewStyle().Foreground(lipgloss.Color("255")),
+		footer:    lipgloss.NewStyle().Foreground(lipgloss.Color("246")),
+		error:     lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true),
+		notice:    lipgloss.NewStyle().Foreground(lipgloss.Color("149")),
+		key: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("238")).
+			Padding(0, 1),
+	}
 }
 
 func (m *tuiModel) Init() tea.Cmd { return nil }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -69,52 +138,183 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) View() string {
-	var b strings.Builder
-	b.WriteString("workswitch TUI (wts = worktree switch)\n")
-	b.WriteString(fmt.Sprintf("Repo: %s\n", m.rc.repo.Root))
-	b.WriteString(fmt.Sprintf("State: %s\n\n", m.rc.store.Path))
+	width := m.width
+	height := m.height
+	if width <= 0 {
+		width = 110
+	}
+	if height <= 0 {
+		height = 30
+	}
 
+	header := m.renderHeader(width)
+	footer := m.renderFooter(width)
+	headerHeight := lipgloss.Height(header)
+	footerHeight := lipgloss.Height(footer)
+
+	// Golden rule #1: account for panel borders in content area.
+	contentHeight := max(6, height-headerHeight-footerHeight)
+	content := m.renderContent(width, contentHeight)
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
+}
+
+func (m *tuiModel) renderHeader(width int) string {
+	title := m.styles.header.Render("workswitch TUI  ·  wts = worktree switch")
+	sub := m.styles.headerSub.Render(
+		truncateLine(fmt.Sprintf("repo: %s   state: %s", m.rc.repo.Root, m.rc.store.Path), width),
+	)
+	return lipgloss.NewStyle().Width(width).Render(
+		lipgloss.JoinVertical(lipgloss.Left, truncateLine(title, width), sub),
+	)
+}
+
+func (m *tuiModel) renderContent(width, height int) string {
 	if len(m.rc.repo.Worktrees) == 0 {
-		b.WriteString("No worktrees configured. Press 'a' to add current directory.\n")
-		b.WriteString("\nKeys: a add-current-dir | q quit\n")
-		if m.message != "" {
-			b.WriteString("\n" + m.message + "\n")
-		}
-		return b.String()
+		empty := m.styles.notice.Render("No worktrees configured. Press 'a' to add repo root as a worktree entry.")
+		panel := m.renderPanel("Worktrees", []string{empty}, width, height)
+		return panel
+	}
+
+	leftWeight, rightWeight := 2, 3
+	total := leftWeight + rightWeight
+	leftWidth := max(30, (width*leftWeight)/total)
+	rightWidth := max(40, width-leftWidth)
+	if leftWidth+rightWidth > width {
+		rightWidth = width - leftWidth
+	}
+
+	left := m.renderListPanel(leftWidth, height)
+	right := m.renderDetailPanel(rightWidth, height)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+func (m *tuiModel) renderListPanel(width, height int) string {
+	lines := make([]string, 0, len(m.rc.repo.Worktrees)+1)
+	maxTextWidth := max(8, width-4)
+	statusByWorktree := map[string]runtime.StatusRow{}
+	for _, row := range m.rows {
+		statusByWorktree[row.Worktree] = row
 	}
 
 	for i, wt := range m.rc.repo.Worktrees {
-		prefix := "  "
+		row := statusByWorktree[wt.Name]
+		status := m.styles.badgeStopped.Render("stopped")
+		if row.Running {
+			status = m.styles.badgeRunning.Render("running")
+		}
+		if row.Active {
+			status += " " + m.styles.badgeActive.Render("active")
+		}
+		line := fmt.Sprintf("%-18s %s", wt.Name, status)
 		if i == m.idx {
-			prefix = "> "
+			line = m.styles.selectedRow.Render(truncateLine(line, maxTextWidth))
+		} else {
+			line = m.styles.row.Render(truncateLine(line, maxTextWidth))
 		}
-		status := "stopped"
-		for _, row := range m.rows {
-			if row.Worktree == wt.Name {
-				if row.Running {
-					status = "running"
-				}
-				if row.Active {
-					status += ",active"
-				}
-				break
-			}
-		}
-		group := wt.Group
-		if proc, err := m.rc.project.Process(wt.Process); err == nil {
-			group = model.EffectiveGroup(proc, wt.Group, wt.Name)
-		}
-		b.WriteString(fmt.Sprintf("%s%s  proc=%s  group=%s  %s\n", prefix, wt.Name, wt.Process, group, status))
-		b.WriteString(fmt.Sprintf("    dir: %s\n", wt.Dir))
+		lines = append(lines, line)
 	}
 
-	b.WriteString("\nKeys: n/p next/prev  s enter switch  r restart  x stop\n")
-	b.WriteString("      a add-cwd  d remove  [ ] change-process  g use-process-group  u clear-group\n")
-	b.WriteString("      q quit\n")
-	if m.message != "" {
-		b.WriteString("\n" + m.message + "\n")
+	return m.renderPanel("Worktrees", lines, width, height)
+}
+
+func (m *tuiModel) renderDetailPanel(width, height int) string {
+	maxTextWidth := max(8, width-4)
+	wt := m.current()
+	if wt == nil {
+		return m.renderPanel("Details", []string{"No worktree selected."}, width, height)
 	}
-	return b.String()
+
+	proc, procErr := m.rc.project.Process(wt.Process)
+	group := wt.Group
+	if procErr == nil {
+		group = model.EffectiveGroup(proc, wt.Group, wt.Name)
+	}
+
+	status := runtime.StatusRow{}
+	for _, row := range m.rows {
+		if row.Worktree == wt.Name {
+			status = row
+			break
+		}
+	}
+
+	lines := []string{
+		m.kv("worktree", truncateLine(wt.Name, maxTextWidth-11)),
+		m.kv("dir", truncateLine(wt.Dir, maxTextWidth-6)),
+		m.kv("process", truncateLine(wt.Process, maxTextWidth-10)),
+		m.kv("group", truncateLine(group, maxTextWidth-8)),
+		m.kv("running", boolWord(status.Running)),
+		m.kv("active", boolWord(status.Active)),
+		"",
+		m.styles.panelTitle.Render("Command"),
+	}
+	if procErr != nil {
+		lines = append(lines, m.styles.error.Render(procErr.Error()))
+	} else {
+		for _, part := range wrapCommand(proc.Command, maxTextWidth) {
+			lines = append(lines, m.styles.row.Render(part))
+		}
+	}
+	return m.renderPanel("Selected", lines, width, height)
+}
+
+func (m *tuiModel) kv(k, v string) string {
+	return m.styles.metaLabel.Render(k+":") + " " + m.styles.metaValue.Render(v)
+}
+
+func (m *tuiModel) renderPanel(title string, lines []string, width, height int) string {
+	innerHeight := max(1, height-2)
+
+	content := make([]string, 0, innerHeight)
+	titleLine := m.styles.panelTitle.Render(truncateLine(title, max(8, width-4)))
+	content = append(content, titleLine)
+	for _, line := range lines {
+		content = append(content, line)
+		if len(content) >= innerHeight {
+			break
+		}
+	}
+	for len(content) < innerHeight {
+		content = append(content, "")
+	}
+
+	return m.styles.panelBorder.Width(width).Render(strings.Join(content, "\n"))
+}
+
+func (m *tuiModel) renderFooter(width int) string {
+	shortcuts := []string{
+		m.keycap("n/p") + " next/prev",
+		m.keycap("s") + " switch",
+		m.keycap("r") + " restart",
+		m.keycap("x") + " stop",
+		m.keycap("a") + " add",
+		m.keycap("d") + " remove",
+		m.keycap("[") + "/" + m.keycap("]") + " process",
+		m.keycap("g/u") + " group set/clear",
+		m.keycap("q") + " quit",
+	}
+	line1 := truncateLine(strings.Join(shortcuts[:5], "   "), width)
+	line2 := truncateLine(strings.Join(shortcuts[5:], "   "), width)
+
+	msg := ""
+	if m.message != "" {
+		if strings.Contains(strings.ToLower(m.message), "error") || strings.Contains(strings.ToLower(m.message), "not found") {
+			msg = m.styles.error.Render(truncateLine(m.message, width))
+		} else {
+			msg = m.styles.notice.Render(truncateLine(m.message, width))
+		}
+	}
+
+	parts := []string{m.styles.footer.Render(line1), m.styles.footer.Render(line2)}
+	if msg != "" {
+		parts = append(parts, msg)
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(parts, "\n"))
+}
+
+func (m *tuiModel) keycap(s string) string {
+	return m.styles.key.Render(s)
 }
 
 func (m *tuiModel) next() {
@@ -300,6 +500,54 @@ func (m *tuiModel) refreshStatus() {
 		return
 	}
 	m.rows = rows
+}
+
+func wrapCommand(s string, width int) []string {
+	if width < 8 {
+		return []string{truncateLine(s, width)}
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var lines []string
+	current := words[0]
+	for i := 1; i < len(words); i++ {
+		candidate := current + " " + words[i]
+		if runeLen(candidate) <= width {
+			current = candidate
+			continue
+		}
+		lines = append(lines, truncateLine(current, width))
+		current = words[i]
+	}
+	lines = append(lines, truncateLine(current, width))
+	return lines
+}
+
+func truncateLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runeLen(s) <= width {
+		return s
+	}
+	r := []rune(s)
+	if width == 1 {
+		return string(r[:1])
+	}
+	return string(r[:width-1]) + "…"
+}
+
+func runeLen(s string) int {
+	return len([]rune(s))
+}
+
+func boolWord(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func indexOfWorktree(repo *state.RepoState, name string) (int, bool) {
