@@ -246,7 +246,8 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 	left := m.renderListPanel(leftWidth, height)
 	right := m.renderDetailPanel(rightWidth, height)
-	return left + " " + right
+	left = lipgloss.NewStyle().MarginRight(spacer).Render(left)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 }
 
 func (m *tuiModel) renderListPanel(width, height int) string {
