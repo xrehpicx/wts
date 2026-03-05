@@ -1,7 +1,17 @@
-# wks
+# workswitch
 
-`wks` is a tmux-backed CLI that manages one process per workspace directory.
-It enforces one active process per `group`, so switching within a group preempts the previous workspace.
+`workswitch` is a tmux-backed process switcher for development workspaces.
+The command is `wts`, which stands for **worktree switch**.
+
+It is designed for teams using AI agents + Git worktrees, where each worktree has the same app stack but only one process should be active within a group at a time.
+
+## Why this exists
+
+When AI agents work in parallel Git worktrees, developers often need to move a shared dev server between worktree directories quickly. `workswitch` lets you model that directly:
+
+- define multiple workspaces (worktree directories)
+- tie them with a group (for example `backend`)
+- switching within that group preempts the previous workspace process
 
 ## Requirements
 
@@ -12,12 +22,19 @@ It enforces one active process per `group`, so switching within a group preempts
 ## Install
 
 ```bash
-go install github.com/xrehpicx/wks@latest
+go install github.com/xrehpicx/wts@latest
 ```
 
-## Quickstart
+## Configuration
 
-1. Create `.workswitch.yaml` in your repo root:
+Default config file: `.wts.yaml`
+
+Also supported for compatibility:
+
+- `.worktreeswitch.yaml`
+- `.workswitch.yaml`
+
+Example config:
 
 ```yaml
 version: 1
@@ -25,43 +42,73 @@ defaults:
   stop_timeout_sec: 8
   shell: /bin/sh
 workspaces:
-  - name: api
-    dir: ./services/api
+  - name: wt-main
+    dir: ../repo-main
+    command: "pnpm dev"
+    group: web
+  - name: wt-agent-a
+    dir: ../repo-agent-a
+    command: "pnpm dev"
+    group: web
+  - name: api-main
+    dir: ../repo-main
     command: "go run ./cmd/api"
     group: backend
-  - name: worker
-    dir: ./services/worker
-    command: "go run ./cmd/worker"
+  - name: api-agent-b
+    dir: ../repo-agent-b
+    command: "go run ./cmd/api"
     group: backend
-  - name: web
-    dir: ./apps/web
-    command: "pnpm dev"
-    group: frontend
 ```
 
-2. Validate and run:
+## Quickstart
 
 ```bash
 make airflow
-./bin/wks validate
-./bin/wks list
-./bin/wks switch api
-./bin/wks switch worker   # stops api (same group)
-./bin/wks switch web      # does not stop worker (different group)
+./bin/wts validate
+./bin/wts list
+./bin/wts switch api-main
+./bin/wts switch api-agent-b   # stops api-main (same group)
+./bin/wts switch wt-main       # independent if in different group
+./bin/wts status
+./bin/wts stop --all
+```
+
+## Help and command docs
+
+CLI help (Cobra-powered):
+
+```bash
+wts --help
+wts switch --help
+wts stop --help
+```
+
+Generate and browse full command docs:
+
+```bash
+make docs
+ls docs/cli
+```
+
+Man pages are generated into `docs/man`:
+
+```bash
+man ./docs/man/wts.1
+man ./docs/man/wts-switch.1
 ```
 
 ## Core commands
 
-- `wks list`
-- `wks switch <workspace> [--attach]`
-- `wks start <workspace> [--attach]`
-- `wks restart <workspace> [--attach]`
-- `wks stop <workspace|--group <name>|--all>`
-- `wks status [workspace] [--json]`
-- `wks logs <workspace> [--lines 200]`
-- `wks pick [--attach]`
-- `wks validate`
-- `wks version`
+- `wts list`
+- `wts switch <workspace> [--attach]`
+- `wts start <workspace> [--attach]`
+- `wts restart <workspace> [--attach]`
+- `wts stop <workspace|--group <name>|--all>`
+- `wts status [workspace] [--json]`
+- `wts logs <workspace> [--lines 200]`
+- `wts pick [--attach]`
+- `wts validate`
+- `wts version`
 
 ## Make targets
 
@@ -74,7 +121,7 @@ Primary flow:
 1. `make airflow` runs `check` + `build`
 2. `make check` runs `tidy`, `fmt`, `vet`, `lint`, `test`
 3. `make coverage` writes `coverage.out`
-4. `make install` installs binary to `GOPATH/bin`
+4. `make install` installs `wts` to `GOPATH/bin`
 
 ## Runtime model
 

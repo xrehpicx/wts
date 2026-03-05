@@ -1,0 +1,48 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts - workswitch (wts: worktree switch) for grouped dev processes via tmux
+
+
+.SH SYNOPSIS
+\fBwts [flags]\fP
+
+
+.SH DESCRIPTION
+workswitch manages one command per workspace directory and uses tmux
+as the runtime source of truth.
+
+.PP
+Use groups to define preemption scope:
+- switch/start within the same group stops the previously active workspace
+- workspaces in different groups can run concurrently
+
+.PP
+Configuration discovery order:
+1. .wts.yaml
+2. .worktreeswitch.yaml (legacy)
+3. .workswitch.yaml (legacy)
+
+
+.SH OPTIONS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for wts
+
+
+.SH EXAMPLE
+.EX
+  wts validate
+  wts list
+  wts switch api-main
+  wts switch api-agent-a
+  wts status --json
+.EE
+
+
+.SH SEE ALSO
+\fBwts-list(1)\fP, \fBwts-logs(1)\fP, \fBwts-pick(1)\fP, \fBwts-restart(1)\fP, \fBwts-start(1)\fP, \fBwts-status(1)\fP, \fBwts-stop(1)\fP, \fBwts-switch(1)\fP, \fBwts-validate(1)\fP, \fBwts-version(1)\fP

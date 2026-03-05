@@ -1,0 +1,37 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-list - List configured workspaces
+
+
+.SH SYNOPSIS
+\fBwts list [flags]\fP
+
+
+.SH DESCRIPTION
+List all configured workspaces from the resolved config file.
+
+.PP
+Shows workspace name, effective group, absolute directory, and configured command.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for list
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+
+.SH EXAMPLE
+.EX
+  wts list
+  wts --config ./my-config.yaml list
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

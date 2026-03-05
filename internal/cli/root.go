@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/xrehpicx/wks/internal/config"
-	"github.com/xrehpicx/wks/internal/model"
-	"github.com/xrehpicx/wks/internal/runtime"
-	"github.com/xrehpicx/wks/internal/tmux"
+	"github.com/xrehpicx/wts/internal/config"
+	"github.com/xrehpicx/wts/internal/model"
+	"github.com/xrehpicx/wts/internal/runtime"
+	"github.com/xrehpicx/wts/internal/tmux"
 )
 
 type app struct {
@@ -39,13 +39,29 @@ func NewRootCmd(version string) *cobra.Command {
 	}
 
 	root := &cobra.Command{
-		Use:           "wks",
-		Aliases:       []string{"workswitch"},
-		Short:         "Switch managed workspace processes via tmux",
+		Use:     "wts",
+		Aliases: []string{"workswitch", "wks"},
+		Short:   "workswitch (wts: worktree switch) for grouped dev processes via tmux",
+		Long: `workswitch manages one command per workspace directory and uses tmux
+as the runtime source of truth.
+
+Use groups to define preemption scope:
+- switch/start within the same group stops the previously active workspace
+- workspaces in different groups can run concurrently
+
+Configuration discovery order:
+1. .wts.yaml
+2. .worktreeswitch.yaml (legacy)
+3. .workswitch.yaml (legacy)`,
+		Example: `  wts validate
+  wts list
+  wts switch api-main
+  wts switch api-agent-a
+  wts status --json`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&a.configPath, "config", "", "path to .workswitch.yaml")
+	root.PersistentFlags().StringVar(&a.configPath, "config", "", "path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)")
 
 	root.AddCommand(a.newListCmd())
 	root.AddCommand(a.newSwitchCmd())
@@ -86,6 +102,11 @@ func (a *app) newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List configured workspaces",
+		Long: `List all configured workspaces from the resolved config file.
+
+Shows workspace name, effective group, absolute directory, and configured command.`,
+		Example: `  wts list
+  wts --config ./my-config.yaml list`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, _ *model.Project) error {
 				rows := manager.ListWorkspaces()
@@ -105,7 +126,15 @@ func (a *app) newSwitchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "switch <workspace>",
 		Short: "Switch active workspace within its group",
-		Args:  cobra.ExactArgs(1),
+		Long: `Activate a workspace with group preemption semantics.
+
+Behavior:
+- if another workspace is active in the same group, it is stopped first
+- if target workspace is already running, it is reused
+- marks the target as active for its group`,
+		Example: `  wts switch api-main
+  wts switch api-agent-b --attach`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, _ *model.Project) error {
 				return manager.Switch(cmd.Context(), args[0], runtime.SwitchOptions{Attach: attach})
@@ -121,7 +150,13 @@ func (a *app) newStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start <workspace>",
 		Short: "Start workspace process and make it active for its group",
-		Args:  cobra.ExactArgs(1),
+		Long: `Start a workspace process using the configured command in its directory.
+
+Like switch, start preempts the currently active workspace in the same group.
+If target is already running, it is reused unless you run restart.`,
+		Example: `  wts start web-main
+  wts start web-agent-a --attach`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, _ *model.Project) error {
 				return manager.Start(cmd.Context(), args[0], runtime.SwitchOptions{Attach: attach})
@@ -137,7 +172,13 @@ func (a *app) newRestartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restart <workspace>",
 		Short: "Restart workspace process and make it active for its group",
-		Args:  cobra.ExactArgs(1),
+		Long: `Force restart the target workspace process.
+
+This always stops and starts the target workspace, then marks it active
+for its group.`,
+		Example: `  wts restart api-main
+  wts restart api-main --attach`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, _ *model.Project) error {
 				return manager.Restart(cmd.Context(), args[0], runtime.SwitchOptions{Attach: attach})
@@ -154,7 +195,16 @@ func (a *app) newStopCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop [workspace]",
 		Short: "Stop workspace process(es)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Stop one or more workspace processes.
+
+You must choose exactly one scope:
+- workspace argument: stop one workspace
+- --group <group>: stop current active workspace in that group
+- --all: stop all configured workspaces`,
+		Example: `  wts stop api-main
+  wts stop --group backend
+  wts stop --all`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all {
 				if len(args) > 0 || group != "" {
@@ -189,7 +239,15 @@ func (a *app) newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status [workspace]",
 		Short: "Show workspace runtime status",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Show current runtime status from tmux metadata and windows.
+
+Fields:
+- running: tmux window for workspace exists
+- active: workspace matches active marker for its group`,
+		Example: `  wts status
+  wts status api-main
+  wts status --json`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspace := ""
 			if len(args) == 1 {
@@ -226,7 +284,12 @@ func (a *app) newLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <workspace>",
 		Short: "Show recent tmux pane output for a workspace",
-		Args:  cobra.ExactArgs(1),
+		Long: `Capture output from the workspace's tmux pane history.
+
+Use --lines to choose how many historical lines to print.`,
+		Example: `  wts logs api-main
+  wts logs api-main --lines 500`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, _ *model.Project) error {
 				output, err := manager.Logs(cmd.Context(), args[0], lines)
@@ -247,6 +310,13 @@ func (a *app) newPickCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pick",
 		Short: "Interactively pick and switch to a workspace",
+		Long: `Interactively choose a workspace and switch to it.
+
+Picker behavior:
+- uses fzf when available
+- falls back to built-in numbered prompt when fzf is missing`,
+		Example: `  wts pick
+  wts pick --attach`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withManager(cmd.Context(), func(manager *runtime.Manager, project *model.Project) error {
 				names := project.WorkspaceNames()
@@ -271,7 +341,16 @@ func (a *app) newPickCmd() *cobra.Command {
 func (a *app) newValidateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
-		Short: "Validate .workswitch.yaml",
+		Short: "Validate .wts.yaml",
+		Long: `Load and validate configuration file schema and workspace directories.
+
+Checks include:
+- config version
+- workspace uniqueness
+- command presence
+- workspace directory existence`,
+		Example: `  wts validate
+  wts --config ./tmp/dev.wts.yaml validate`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project, err := a.loadProject()
 			if err != nil {
@@ -285,10 +364,12 @@ func (a *app) newValidateCmd() *cobra.Command {
 
 func (a *app) newVersionCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Show wks version",
+		Use:     "version",
+		Short:   "Show wts version",
+		Long:    "Print the workswitch CLI version.",
+		Example: `  wts version`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintf(a.out, "wks %s\n", a.version)
+			_, _ = fmt.Fprintf(a.out, "wts %s\n", a.version)
 			return nil
 		},
 	}

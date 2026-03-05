@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/xrehpicx/wks/internal/cli"
+	"github.com/xrehpicx/wts/internal/cli"
 )
 
 var version = "0.1.0"

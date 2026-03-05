@@ -1,0 +1,42 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-restart - Restart workspace process and make it active for its group
+
+
+.SH SYNOPSIS
+\fBwts restart  [flags]\fP
+
+
+.SH DESCRIPTION
+Force restart the target workspace process.
+
+.PP
+This always stops and starts the target workspace, then marks it active
+for its group.
+
+
+.SH OPTIONS
+\fB--attach\fP[=false]
+	attach/focus tmux after restarting
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for restart
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+
+.SH EXAMPLE
+.EX
+  wts restart api-main
+  wts restart api-main --attach
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

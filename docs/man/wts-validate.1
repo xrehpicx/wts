@@ -1,0 +1,41 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-validate - Validate .wts.yaml
+
+
+.SH SYNOPSIS
+\fBwts validate [flags]\fP
+
+
+.SH DESCRIPTION
+Load and validate configuration file schema and workspace directories.
+
+.PP
+Checks include:
+- config version
+- workspace uniqueness
+- command presence
+- workspace directory existence
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for validate
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+
+.SH EXAMPLE
+.EX
+  wts validate
+  wts --config ./tmp/dev.wts.yaml validate
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

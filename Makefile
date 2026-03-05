@@ -1,4 +1,4 @@
-APP_NAME := wks
+APP_NAME := wts
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP_NAME)
 GO := go
@@ -6,7 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
 
-.PHONY: help airflow check tidy fmt vet lint test coverage build run install clean
+.PHONY: help airflow check tidy fmt vet lint test coverage docs build run install clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -33,7 +33,10 @@ test: ## Run tests
 coverage: ## Generate coverage report in coverage.out
 	$(GO) test -coverprofile=coverage.out ./...
 
-build: ## Build binary to ./bin/wks
+docs: ## Generate CLI markdown docs and man pages
+	$(GO) run ./cmd/genman
+
+build: ## Build binary to ./bin/wts
 	mkdir -p $(BIN_DIR)
 	$(GO) build $(LDFLAGS) -o $(BIN) .
 

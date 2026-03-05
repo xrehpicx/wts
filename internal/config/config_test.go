@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/xrehpicx/wks/internal/model"
+	"github.com/xrehpicx/wts/internal/model"
 )
 
 func TestLoadAssignsDefaultsAndImplicitGroup(t *testing.T) {

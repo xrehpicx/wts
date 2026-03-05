@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/xrehpicx/wks/internal/model"
-	"github.com/xrehpicx/wks/internal/tmux"
+	"github.com/xrehpicx/wts/internal/model"
+	"github.com/xrehpicx/wts/internal/tmux"
 )
 
 type Backend interface {

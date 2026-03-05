@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xrehpicx/wks/internal/model"
-	"github.com/xrehpicx/wks/internal/tmux"
+	"github.com/xrehpicx/wts/internal/model"
+	"github.com/xrehpicx/wts/internal/tmux"
 )
 
 type mockBackend struct {
@@ -69,7 +69,7 @@ func testProject() *model.Project {
 			{Name: "web", ResolvedDir: "/tmp/web", Command: "pnpm dev", EffectiveGroup: "frontend", Env: map[string]string{}},
 		},
 	}
-	return model.NewProject("/tmp/.workswitch.yaml", "/tmp", cfg)
+	return model.NewProject("/tmp/.wts.yaml", "/tmp", cfg)
 }
 
 func TestSwitchStartsWorkspaceAndMarksActive(t *testing.T) {

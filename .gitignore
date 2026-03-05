@@ -9,7 +9,9 @@ go.work
 # Coverage
 coverage.out
 
-# Local workswitch runtime config
+# Local runtime config
+.wts.yaml
+.worktreeswitch.yaml
 .workswitch.yaml
 
 # Local agent metadata

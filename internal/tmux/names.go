@@ -10,7 +10,7 @@ import (
 func SessionName(repoRoot string) string {
 	base := sanitize(filepath.Base(repoRoot))
 	hash := sha1.Sum([]byte(repoRoot))
-	return fmt.Sprintf("wks_%x_%s", hash[:4], base)
+	return fmt.Sprintf("wts_%x_%s", hash[:4], base)
 }
 
 func WindowName(workspace string) string {
@@ -18,11 +18,11 @@ func WindowName(workspace string) string {
 }
 
 func GroupOptionKey(group string) string {
-	return "@wks_active_" + sanitize(group)
+	return "@wts_active_" + sanitize(group)
 }
 
 func LastSelectedOptionKey() string {
-	return "@wks_last_selected"
+	return "@wts_last_selected"
 }
 
 func sanitize(value string) string {

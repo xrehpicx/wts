@@ -1,0 +1,41 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-logs - Show recent tmux pane output for a workspace
+
+
+.SH SYNOPSIS
+\fBwts logs  [flags]\fP
+
+
+.SH DESCRIPTION
+Capture output from the workspace's tmux pane history.
+
+.PP
+Use --lines to choose how many historical lines to print.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for logs
+
+.PP
+\fB--lines\fP=200
+	number of log lines to capture
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+
+.SH EXAMPLE
+.EX
+  wts logs api-main
+  wts logs api-main --lines 500
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

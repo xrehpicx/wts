@@ -1,0 +1,43 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-pick - Interactively pick and switch to a workspace
+
+
+.SH SYNOPSIS
+\fBwts pick [flags]\fP
+
+
+.SH DESCRIPTION
+Interactively choose a workspace and switch to it.
+
+.PP
+Picker behavior:
+- uses fzf when available
+- falls back to built-in numbered prompt when fzf is missing
+
+
+.SH OPTIONS
+\fB--attach\fP[=false]
+	attach/focus tmux after switching
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for pick
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+
+
+.SH EXAMPLE
+.EX
+  wts pick
+  wts pick --attach
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

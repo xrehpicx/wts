@@ -13,7 +13,7 @@ func TestSessionNameIsDeterministic(t *testing.T) {
 	if name1 != name2 {
 		t.Fatalf("expected deterministic session name")
 	}
-	if !strings.HasPrefix(name1, "wks_") {
+	if !strings.HasPrefix(name1, "wts_") {
 		t.Fatalf("unexpected session prefix: %q", name1)
 	}
 	if strings.Contains(name1, ":") {

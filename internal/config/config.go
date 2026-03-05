@@ -11,10 +11,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/xrehpicx/wks/internal/model"
+	"github.com/xrehpicx/wts/internal/model"
 )
 
-const DefaultConfigFile = ".workswitch.yaml"
+const DefaultConfigFile = ".wts.yaml"
+const LegacyConfigFile = ".worktreeswitch.yaml"
+const DeprecatedConfigFile = ".workswitch.yaml"
 
 var workspaceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
@@ -24,7 +26,10 @@ func Load(configPath string) (*model.Project, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve working directory: %w", err)
 		}
-		configPath = filepath.Join(cwd, DefaultConfigFile)
+		configPath, err = discoverConfigPath(cwd)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	absPath, err := filepath.Abs(configPath)
@@ -53,6 +58,25 @@ func Load(configPath string) (*model.Project, error) {
 	}
 
 	return model.NewProject(absPath, rootDir, cfg), nil
+}
+
+func discoverConfigPath(cwd string) (string, error) {
+	candidates := []string{
+		DefaultConfigFile,
+		LegacyConfigFile,
+		DeprecatedConfigFile,
+	}
+	for _, name := range candidates {
+		path := filepath.Join(cwd, name)
+		_, err := os.Stat(path)
+		if err == nil {
+			return path, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("check config candidate %q: %w", name, err)
+		}
+	}
+	return filepath.Join(cwd, DefaultConfigFile), nil
 }
 
 func normalizeAndValidate(cfg *model.Config, rootDir string) error {
