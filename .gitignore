@@ -1,0 +1,13 @@
+# Binaries
+/bin/
+*.exe
+*.out
+
+# Go workspace file
+go.work
+
+# Coverage
+coverage.out
+
+# Local workswitch runtime config
+.workswitch.yaml

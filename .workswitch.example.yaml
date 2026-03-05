@@ -1,0 +1,17 @@
+version: 1
+defaults:
+  stop_timeout_sec: 8
+  shell: /bin/sh
+workspaces:
+  - name: api
+    dir: ./services/api
+    command: "go run ./cmd/api"
+    group: backend
+  - name: worker
+    dir: ./services/worker
+    command: "go run ./cmd/worker"
+    group: backend
+  - name: web
+    dir: ./apps/web
+    command: "pnpm dev"
+    group: frontend
