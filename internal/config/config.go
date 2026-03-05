@@ -16,7 +16,7 @@ import (
 
 const DefaultConfigFile = ".wts.yaml"
 
-var processNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var processNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._:@/ -]+$`)
 
 func Load(configPath string) (*model.Project, error) {
 	if configPath == "" {
@@ -95,7 +95,7 @@ func normalizeProcess(proc *model.Process) error {
 		return fmt.Errorf("name is required")
 	}
 	if !processNamePattern.MatchString(proc.Name) {
-		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-')", proc.Name)
+		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-', ':', '@', '/', ' ')", proc.Name)
 	}
 
 	proc.Command = strings.TrimSpace(proc.Command)
