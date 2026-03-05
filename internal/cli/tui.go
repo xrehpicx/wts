@@ -116,25 +116,11 @@ func newTUIStyles() tuiStyles {
 			Foreground(ac("#102A43", "#F0F6FF")).
 			Background(ac("#DCEEFF", "#24364A")).
 			Bold(true),
-		row:       lipgloss.NewStyle().Foreground(ac("#1F2937", "#CED7E2")),
-		colHeader: lipgloss.NewStyle().Foreground(ac("#3E5C76", "#8FB3D9")).Bold(true),
-		badgeRunning: lipgloss.NewStyle().
-			Foreground(ac("#0F5132", "#8DE1B0")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ac("#81C995", "#3A7A5A")).
-			Padding(0, 1).
-			Bold(true),
-		badgeStopped: lipgloss.NewStyle().
-			Foreground(ac("#4B5563", "#9AA6B2")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ac("#CBD5E1", "#4C5A6A")).
-			Padding(0, 1),
-		badgeActive: lipgloss.NewStyle().
-			Foreground(ac("#7A4A00", "#FFD580")).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ac("#D8B46A", "#8A6E37")).
-			Padding(0, 1).
-			Bold(true),
+		row:          lipgloss.NewStyle().Foreground(ac("#1F2937", "#CED7E2")),
+		colHeader:    lipgloss.NewStyle().Foreground(ac("#3E5C76", "#8FB3D9")).Bold(true),
+		badgeRunning: lipgloss.NewStyle().Foreground(ac("#0F5132", "#8DE1B0")).Bold(true),
+		badgeStopped: lipgloss.NewStyle().Foreground(ac("#4B5563", "#9AA6B2")),
+		badgeActive:  lipgloss.NewStyle().Foreground(ac("#7A4A00", "#FFD580")).Bold(true),
 		iconRunning:  lipgloss.NewStyle().Foreground(ac("#0E9F6E", "#7FE8B5")).Bold(true),
 		iconStopped:  lipgloss.NewStyle().Foreground(ac("#94A3B8", "#6B7C8F")),
 		iconActive:   lipgloss.NewStyle().Foreground(ac("#D97706", "#FFD27D")).Bold(true),
@@ -250,15 +236,17 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 	leftWeight, rightWeight := 2, 3
 	total := leftWeight + rightWeight
-	leftWidth := max(30, (width*leftWeight)/total)
-	rightWidth := max(40, width-leftWidth)
+	spacer := 1
+	usableWidth := max(20, width-spacer)
+	leftWidth := max(30, (usableWidth*leftWeight)/total)
+	rightWidth := max(40, usableWidth-leftWidth)
 	if leftWidth+rightWidth > width {
-		rightWidth = width - leftWidth
+		rightWidth = usableWidth - leftWidth
 	}
 
 	left := m.renderListPanel(leftWidth, height)
 	right := m.renderDetailPanel(rightWidth, height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	return left + " " + right
 }
 
 func (m *tuiModel) renderListPanel(width, height int) string {
@@ -272,23 +260,23 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 
 	for i, wt := range m.rc.repo.Worktrees {
 		row := statusByWorktree[wt.Name]
-		runIcon := m.styles.iconStopped.Render("○")
+		runIcon := "-"
 		if row.Running {
-			runIcon = m.styles.iconRunning.Render("●")
+			runIcon = "R"
 		}
-		activeIcon := m.styles.iconInactive.Render("·")
+		activeIcon := "-"
 		if row.Active {
-			activeIcon = m.styles.iconActive.Render("★")
+			activeIcon = "A"
 		}
 		sel := " "
 		if i == m.idx {
-			sel = "▶"
+			sel = ">"
 		}
 		group := wt.Group
 		if proc, err := m.rc.project.Process(wt.Process); err == nil {
 			group = model.EffectiveGroup(proc, wt.Group, wt.Name)
 		}
-		line := fmt.Sprintf(
+		plainLine := fmt.Sprintf(
 			"%s %s %s  %-18s  %-14s  %-12s",
 			sel,
 			runIcon,
@@ -297,10 +285,12 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 			truncateLine(wt.Process, 14),
 			truncateLine(group, 12),
 		)
+		plainLine = truncateLine(plainLine, maxTextWidth)
+		line := plainLine
 		if i == m.idx {
-			line = m.styles.selectedRow.Render(truncateLine(line, maxTextWidth))
+			line = m.styles.selectedRow.Render(plainLine)
 		} else {
-			line = m.styles.row.Render(truncateLine(line, maxTextWidth))
+			line = m.styles.row.Render(plainLine)
 		}
 		lines = append(lines, line)
 	}
@@ -338,7 +328,7 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	}
 
 	lines := []string{
-		runBadge + " " + activeBadge,
+		m.styles.panelTitle.Render("status:") + " " + runBadge + " | " + activeBadge,
 		"",
 		m.kv("worktree", truncateLine(wt.Name, maxTextWidth-11)),
 		m.kv("dir", truncateLine(wt.Dir, maxTextWidth-6)),
