@@ -60,6 +60,11 @@ workspaces:
     group: backend
 ```
 
+Repo demo process script:
+
+- `scripts/example-longrun.sh` is a sample long-running command you can assign to any workspace.
+- included in `.wts.example.yaml` as workspace `demo-script`.
+
 ## Quickstart
 
 ```bash

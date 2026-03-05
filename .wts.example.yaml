@@ -7,6 +7,10 @@ workspaces:
     dir: ./services/api
     command: "go run ./cmd/api"
     group: backend
+  - name: demo-script
+    dir: .
+    command: "./scripts/example-longrun.sh demo-script 3"
+    group: demo
   - name: worker
     dir: ./services/worker
     command: "go run ./cmd/worker"
