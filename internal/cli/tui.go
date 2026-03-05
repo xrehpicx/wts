@@ -96,13 +96,13 @@ type tuiKeyMap struct {
 
 func newTUIKeyMap() tuiKeyMap {
 	return tuiKeyMap{
-		Next:     key.NewBinding(key.WithKeys("n", "down"), key.WithHelp("n/↓", "next")),
-		Prev:     key.NewBinding(key.WithKeys("p", "up"), key.WithHelp("p/↑", "prev")),
+		Next:     key.NewBinding(key.WithKeys("n", "j", "down"), key.WithHelp("j/↓", "next")),
+		Prev:     key.NewBinding(key.WithKeys("p", "k", "up"), key.WithHelp("k/↑", "prev")),
 		Switch:   key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/↵", "switch")),
 		Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
 		Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
-		ProcPrev: key.NewBinding(key.WithKeys("left", "["), key.WithHelp("←/[", "prev process")),
-		ProcNext: key.NewBinding(key.WithKeys("right", "]"), key.WithHelp("→/]", "next process")),
+		ProcPrev: key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev process")),
+		ProcNext: key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next process")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search process")),
 		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),

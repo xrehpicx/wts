@@ -125,6 +125,16 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 	if err != nil {
 		return err
 	}
+	if running {
+		// If a different process is selected, restart with the new one.
+		currentProc, _ := m.backend.GetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir))
+		if currentProc != proc.Name {
+			if err := m.stopWorktreeProcess(ctx, wt); err != nil {
+				return fmt.Errorf("stop old process in %q: %w", wt.Name, err)
+			}
+			running = false
+		}
+	}
 	if !running {
 		if err := m.startWorktreeProcess(ctx, wt, proc); err != nil {
 			return err
