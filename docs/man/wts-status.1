@@ -10,7 +10,7 @@ wts-status - Show worktree runtime status
 
 
 .SH DESCRIPTION
-Show worktree runtime status
+Show running/active status for discovered worktrees and the currently associated process profile.
 
 
 .SH OPTIONS
@@ -26,9 +26,13 @@ Show worktree runtime status
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts status
+  wts status repo-main
+  wts status --json
+.EE
 
 
 .SH SEE ALSO

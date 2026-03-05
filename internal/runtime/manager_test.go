@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrehpicx/wts/internal/gitwt"
 	"github.com/xrehpicx/wts/internal/model"
-	"github.com/xrehpicx/wts/internal/state"
 	"github.com/xrehpicx/wts/internal/tmux"
 )
 
@@ -57,6 +57,9 @@ func (m *mockBackend) GetSessionOption(_ context.Context, _ string, key string) 
 func (m *mockBackend) CapturePane(context.Context, string, string, int) (string, error) {
 	return "", nil
 }
+func (m *mockBackend) PaneCurrentCommand(context.Context, string, string) (string, error) {
+	return "", nil
+}
 func (m *mockBackend) Attach(context.Context, string, string) error { return nil }
 
 func testProject() *model.Project {
@@ -67,82 +70,95 @@ func testProject() *model.Project {
 			Shell:          model.DefaultShell,
 		},
 		Processes: []model.Process{
-			{Name: "api", Command: "go run .", Group: "backend", Env: map[string]string{}},
-			{Name: "worker", Command: "go run .", Group: "backend", Env: map[string]string{}},
-			{Name: "web", Command: "pnpm dev", Group: "frontend", Env: map[string]string{}},
+			{Name: "api", Command: "go run .", Env: map[string]string{}},
+			{Name: "web", Command: "pnpm dev", Env: map[string]string{}},
 		},
 	}
 	return model.NewProject("/tmp/.wts.yaml", "/tmp", cfg)
 }
 
-func testRepo() *state.RepoState {
-	return &state.RepoState{
-		Root: "/tmp/repo",
-		Worktrees: []state.Worktree{
-			{Name: "api-main", Dir: "/tmp/api-main", Process: "api"},
-			{Name: "api-agent", Dir: "/tmp/api-agent", Process: "worker"},
-			{Name: "web-main", Dir: "/tmp/web-main", Process: "web"},
-		},
+func testWorktrees() []gitwt.Worktree {
+	return []gitwt.Worktree{
+		{Name: "repo-main", Dir: "/tmp/repo-main", Branch: "main"},
+		{Name: "repo-agent", Dir: "/tmp/repo-agent", Branch: "agent"},
 	}
 }
 
 func TestSwitchStartsWorktreeAndMarksActive(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
-	manager := NewManager(testProject(), testRepo(), backend)
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
 
-	if err := manager.Switch(context.Background(), "api-main", SwitchOptions{}); err != nil {
+	if err := manager.Switch(context.Background(), "repo-main", RunOptions{}); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 
-	window := tmux.WindowName("api-main")
+	window := tmux.WindowName("/tmp/repo-main")
 	if !backend.windows[window] {
 		t.Fatalf("expected %q to be running", window)
 	}
-	key := tmux.GroupOptionKey("backend")
-	if backend.options[key] != "api-main" {
-		t.Fatalf("unexpected active backend value: %q", backend.options[key])
+	if backend.options[tmux.ActiveWorktreeOptionKey()] != "/tmp/repo-main" {
+		t.Fatalf("unexpected active worktree: %q", backend.options[tmux.ActiveWorktreeOptionKey()])
+	}
+	if backend.options[tmux.ActiveProcessOptionKey()] != "api" {
+		t.Fatalf("unexpected active process: %q", backend.options[tmux.ActiveProcessOptionKey()])
 	}
 }
 
-func TestSwitchPreemptsSameGroup(t *testing.T) {
+func TestSwitchPreemptsPreviousWorktree(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
-	manager := NewManager(testProject(), testRepo(), backend)
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
 	ctx := context.Background()
 
-	if err := manager.Switch(ctx, "api-main", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api-main: %v", err)
+	if err := manager.Switch(ctx, "repo-main", RunOptions{}); err != nil {
+		t.Fatalf("switch repo-main: %v", err)
 	}
-	if err := manager.Switch(ctx, "api-agent", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api-agent: %v", err)
+	if err := manager.Switch(ctx, "repo-agent", RunOptions{}); err != nil {
+		t.Fatalf("switch repo-agent: %v", err)
 	}
 
-	if backend.windows[tmux.WindowName("api-main")] {
+	if backend.windows[tmux.WindowName("/tmp/repo-main")] {
 		t.Fatalf("expected previous worktree stopped")
 	}
-	if !backend.windows[tmux.WindowName("api-agent")] {
+	if !backend.windows[tmux.WindowName("/tmp/repo-agent")] {
 		t.Fatalf("expected target worktree running")
 	}
 }
 
-func TestSwitchDifferentGroupNoPreempt(t *testing.T) {
+func TestSwitchUsesRequestedProcess(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
-	manager := NewManager(testProject(), testRepo(), backend)
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+
+	if err := manager.Switch(context.Background(), "repo-agent", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+
+	if backend.options[tmux.ActiveProcessOptionKey()] != "web" {
+		t.Fatalf("unexpected active process: %q", backend.options[tmux.ActiveProcessOptionKey()])
+	}
+	if backend.options[tmux.ProcessOptionKey("/tmp/repo-agent")] != "web" {
+		t.Fatalf("unexpected process option for worktree")
+	}
+}
+
+func TestStopActiveClearsActiveOptions(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
 	ctx := context.Background()
 
-	if err := manager.Switch(ctx, "api-main", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api-main: %v", err)
+	if err := manager.Switch(ctx, "repo-main", RunOptions{}); err != nil {
+		t.Fatalf("switch: %v", err)
 	}
-	if err := manager.Switch(ctx, "web-main", SwitchOptions{}); err != nil {
-		t.Fatalf("switch web-main: %v", err)
+	if err := manager.StopActive(ctx); err != nil {
+		t.Fatalf("stop active: %v", err)
 	}
-
-	if !backend.windows[tmux.WindowName("api-main")] {
-		t.Fatalf("expected api-main still running")
+	if backend.options[tmux.ActiveWorktreeOptionKey()] != "" {
+		t.Fatalf("expected active worktree cleared")
 	}
-	if !backend.windows[tmux.WindowName("web-main")] {
-		t.Fatalf("expected web-main running")
+	if backend.options[tmux.ActiveProcessOptionKey()] != "" {
+		t.Fatalf("expected active process cleared")
 	}
 }

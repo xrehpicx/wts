@@ -8,17 +8,19 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ### Added
 
-- New `workswitch` CLI (`wts`, short for worktree switch) with commands: `list`, `switch`, `start`, `restart`,
-  `stop`, `status`, `logs`, `pick`, `validate`, and `version`
-- Bubble Tea powered `wts tui` with worktree navigation and management shortcuts
-- New persistent state store at `~/.workswitch/state.yaml` for per-repo worktree assignments
-- Repo-local process-only config loader for `.wts.yaml` with validation/defaults
-- Runtime manager enforcing one active worktree process per group
+- `workswitch` CLI (`wts`, short for worktree switch) with Cobra command surface
+- Bubble Tea + Lipgloss TUI for worktree navigation, process selection, and handoff
+- Repo-local process profile config loader for `.wts.yaml` with validation/defaults
+- Runtime manager enforcing single active worktree process handoff semantics
+- Git worktree discovery integration using `git worktree list --porcelain`
 - Interactive picker with `fzf` support and built-in fallback prompt
-- Unit/integration-style tests for config normalization, tmux naming, picker fallback,
-  and group preemption behavior
-- Expanded Cobra help text (`Long` + `Example`) for all commands
 - Generated CLI markdown docs and man pages under `docs/`
+
+### Changed
+
+- Removed state/group model (`~/.workswitch/state.yaml`, group overrides, assignment commands)
+- Runtime now discovers worktrees live from Git and preempts only the previously active worktree
+- Simplified command set to pure worktree/process handoff operations
 
 ## [0.1.0] - 2026-03-05
 

@@ -13,16 +13,23 @@ func SessionName(repoRoot string) string {
 	return fmt.Sprintf("wts_%x_%s", hash[:4], base)
 }
 
-func WindowName(workspace string) string {
-	return "ws:" + sanitize(workspace)
+func WindowName(worktreeDir string) string {
+	base := sanitize(filepath.Base(worktreeDir))
+	hash := sha1.Sum([]byte(filepath.Clean(worktreeDir)))
+	return fmt.Sprintf("ws_%x_%s", hash[:4], base)
 }
 
-func GroupOptionKey(group string) string {
-	return "@wts_active_" + sanitize(group)
+func ActiveWorktreeOptionKey() string {
+	return "@wts_active_worktree"
 }
 
-func LastSelectedOptionKey() string {
-	return "@wts_last_selected"
+func ActiveProcessOptionKey() string {
+	return "@wts_active_process"
+}
+
+func ProcessOptionKey(worktreeDir string) string {
+	hash := sha1.Sum([]byte(filepath.Clean(worktreeDir)))
+	return fmt.Sprintf("@wts_process_%x", hash[:6])
 }
 
 func sanitize(value string) string {

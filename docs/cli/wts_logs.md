@@ -2,8 +2,19 @@
 
 Show recent tmux pane output for a worktree
 
+### Synopsis
+
+Capture recent output lines from the tmux window for a running worktree process.
+
 ```
 wts logs <worktree> [flags]
+```
+
+### Examples
+
+```
+wts logs repo-main
+  wts logs ../repo-agent --lines 400
 ```
 
 ### Options
@@ -17,10 +28,9 @@ wts logs <worktree> [flags]
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

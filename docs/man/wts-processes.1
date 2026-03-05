@@ -10,7 +10,7 @@ wts-processes - List process profiles from config
 
 
 .SH DESCRIPTION
-List process profiles from config
+Show process profile names and commands from .wts.yaml.
 
 
 .SH OPTIONS
@@ -22,9 +22,12 @@ List process profiles from config
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts processes
+  wts processes --config ../other/.wts.yaml
+.EE
 
 
 .SH SEE ALSO

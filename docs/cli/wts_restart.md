@@ -1,26 +1,41 @@
 ## wts restart
 
-Restart process for a worktree
+Restart process in a worktree
+
+### Synopsis
+
+Start or move a process profile to a target worktree.
+
+The currently active worktree process is stopped first, then the target process
+is started in the selected worktree directory.
 
 ```
 wts restart <worktree> [flags]
 ```
 
+### Examples
+
+```
+wts restart repo-main
+  wts restart ../repo-agent --process demo-script
+  wts restart /abs/path/to/worktree --attach
+```
+
 ### Options
 
 ```
-      --attach   attach/focus tmux after command
-  -h, --help     help for restart
+      --attach           attach/focus tmux after command
+  -h, --help             help for restart
+      --process string   process profile name (default: first process in config)
 ```
 
 ### Options inherited from parent commands
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

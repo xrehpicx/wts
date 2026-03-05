@@ -2,8 +2,19 @@
 
 List process profiles from config
 
+### Synopsis
+
+Show process profile names and commands from .wts.yaml.
+
 ```
 wts processes [flags]
+```
+
+### Examples
+
+```
+wts processes
+  wts processes --config ../other/.wts.yaml
 ```
 
 ### Options
@@ -16,10 +27,9 @@ wts processes [flags]
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

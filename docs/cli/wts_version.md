@@ -16,10 +16,9 @@ wts version [flags]
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

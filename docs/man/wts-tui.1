@@ -10,7 +10,25 @@ wts-tui - Open interactive Bubble Tea TUI
 
 
 .SH DESCRIPTION
-Open interactive Bubble Tea TUI
+Open the interactive TUI for worktree/process handoff.
+
+.PP
+The TUI lets you move selection across discovered worktrees, choose process
+profiles, and switch/restart/stop quickly.
+
+.PP
+Shortcuts:
+  n/down   next worktree
+  p/up     previous worktree
+  [ / ]    previous/next process profile
+  s/enter  switch
+  r        restart
+  x        stop
+  ?        toggle shortcut help
+  q        quit
+
+.PP
+Exiting TUI does not stop running worktree processes.
 
 
 .SH OPTIONS
@@ -22,9 +40,11 @@ Open interactive Bubble Tea TUI
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts tui
+.EE
 
 
 .SH SEE ALSO

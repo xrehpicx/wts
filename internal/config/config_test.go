@@ -17,7 +17,6 @@ func TestLoadAssignsDefaults(t *testing.T) {
 processes:
   - name: dev
     command: "go run ./cmd/api"
-    group: backend
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)

@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts - workswitch (wts: worktree switch) for moving processes across worktrees
+wts - workswitch (wts: worktree switch) process handoff for git worktrees
 
 
 .SH SYNOPSIS
@@ -11,11 +11,11 @@ wts - workswitch (wts: worktree switch) for moving processes across worktrees
 
 .SH DESCRIPTION
 Process config lives in .wts.yaml.
-Worktree directory assignments live in ~/.workswitch/state.yaml.
+Worktrees are discovered live from: git worktree list --porcelain.
 
 .PP
-Use this when AI agents/devs work in multiple git worktrees and you want
-fast process handoff with per-group preemption.
+Switching preempts the previously active worktree process and starts the selected
+process in the target worktree.
 
 
 .SH OPTIONS
@@ -26,10 +26,17 @@ fast process handoff with per-group preemption.
 \fB-h\fP, \fB--help\fP[=false]
 	help for wts
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts validate
+  wts list
+  wts switch repo-main --process api
+  wts next --process demo-script
+  wts status --json
+  wts tui
+.EE
 
 
 .SH SEE ALSO
-\fBwts-add(1)\fP, \fBwts-assign(1)\fP, \fBwts-group(1)\fP, \fBwts-list(1)\fP, \fBwts-logs(1)\fP, \fBwts-next(1)\fP, \fBwts-pick(1)\fP, \fBwts-prev(1)\fP, \fBwts-processes(1)\fP, \fBwts-remove(1)\fP, \fBwts-restart(1)\fP, \fBwts-start(1)\fP, \fBwts-status(1)\fP, \fBwts-stop(1)\fP, \fBwts-switch(1)\fP, \fBwts-tui(1)\fP, \fBwts-validate(1)\fP, \fBwts-version(1)\fP
+\fBwts-init(1)\fP, \fBwts-list(1)\fP, \fBwts-logs(1)\fP, \fBwts-next(1)\fP, \fBwts-pick(1)\fP, \fBwts-prev(1)\fP, \fBwts-processes(1)\fP, \fBwts-restart(1)\fP, \fBwts-start(1)\fP, \fBwts-status(1)\fP, \fBwts-stop(1)\fP, \fBwts-switch(1)\fP, \fBwts-tui(1)\fP, \fBwts-validate(1)\fP, \fBwts-version(1)\fP

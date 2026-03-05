@@ -10,16 +10,17 @@ wts-stop - Stop worktree process(es)
 
 
 .SH DESCRIPTION
-Stop worktree process(es)
+Stop process windows managed by wts.
+
+.PP
+With no arguments it stops the active worktree process.
+With a selector it stops only that worktree.
+With --all it stops all discovered worktree windows.
 
 
 .SH OPTIONS
 \fB--all\fP[=false]
-	stop all worktrees
-
-.PP
-\fB--group\fP=""
-	stop active worktree in group
+	stop all discovered worktrees
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -30,9 +31,14 @@ Stop worktree process(es)
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts stop
+  wts stop repo-main
+  wts stop /abs/path/to/worktree
+  wts stop --all
+.EE
 
 
 .SH SEE ALSO

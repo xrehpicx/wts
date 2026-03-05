@@ -21,6 +21,7 @@ type Backend interface {
 	SetSessionOption(ctx context.Context, session, key, value string) error
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
 	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
+	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
 	Attach(ctx context.Context, session, window string) error
 }
 
@@ -191,6 +192,14 @@ func (c *Client) CapturePane(ctx context.Context, session, window string, lines 
 		return "", fmt.Errorf("capture pane for %q: %w", window, err)
 	}
 	return output, nil
+}
+
+func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string) (string, error) {
+	output, err := c.runner.Run(ctx, c.bin, "display-message", "-p", "-t", session+":"+window, "#{pane_current_command}")
+	if err != nil {
+		return "", fmt.Errorf("pane command for %q: %w", window, err)
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func (c *Client) Attach(ctx context.Context, session, window string) error {

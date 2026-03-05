@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-list - List configured worktrees for this repo
+wts-list - List git worktrees for this repo
 
 
 .SH SYNOPSIS
@@ -10,7 +10,7 @@ wts-list - List configured worktrees for this repo
 
 
 .SH DESCRIPTION
-List configured worktrees for this repo
+Discover worktrees using Git and print worktree name, branch, and absolute directory.
 
 
 .SH OPTIONS
@@ -22,9 +22,11 @@ List configured worktrees for this repo
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts list
+.EE
 
 
 .SH SEE ALSO

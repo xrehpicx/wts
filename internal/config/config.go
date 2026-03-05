@@ -103,7 +103,6 @@ func normalizeProcess(proc *model.Process) error {
 		return fmt.Errorf("command is required")
 	}
 
-	proc.Group = strings.TrimSpace(proc.Group)
 	if proc.Env == nil {
 		proc.Env = map[string]string{}
 	}

@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-prev - Switch to previous worktree in list
+wts-prev - Switch to previous git worktree in list
 
 
 .SH SYNOPSIS
@@ -10,21 +10,33 @@ wts-prev - Switch to previous worktree in list
 
 
 .SH DESCRIPTION
-Switch to previous worktree in list
+Move to the previous discovered worktree and hand off the selected process profile.
 
 
 .SH OPTIONS
+\fB--attach\fP[=false]
+	attach/focus tmux after switching
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for prev
+
+.PP
+\fB--process\fP=""
+	process profile name (default: first process in config)
 
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts prev
+  wts prev --process api
+  wts prev --attach
+.EE
 
 
 .SH SEE ALSO

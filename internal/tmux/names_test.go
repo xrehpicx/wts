@@ -24,8 +24,11 @@ func TestSessionNameIsDeterministic(t *testing.T) {
 func TestWindowName(t *testing.T) {
 	t.Parallel()
 
-	window := WindowName("api-server")
-	if window != "ws:api-server" {
-		t.Fatalf("unexpected window name: %q", window)
+	window := WindowName("/tmp/repo-api")
+	if !strings.HasPrefix(window, "ws_") {
+		t.Fatalf("unexpected window name prefix: %q", window)
+	}
+	if !strings.Contains(window, "_repo-api") {
+		t.Fatalf("unexpected window name suffix: %q", window)
 	}
 }

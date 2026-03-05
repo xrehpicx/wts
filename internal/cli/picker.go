@@ -30,7 +30,7 @@ func NewPicker(in io.Reader, out, errOut io.Writer) *Picker {
 
 func (p *Picker) Select(names []string) (string, error) {
 	if len(names) == 0 {
-		return "", fmt.Errorf("no worktrees configured")
+		return "", fmt.Errorf("no git worktrees found (create one with: git worktree add ../branch-name)")
 	}
 
 	if p.LookPath != nil && p.RunFZF != nil {

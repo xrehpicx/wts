@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-start - Start process for a worktree
+wts-start - Start process in a worktree (preempts active)
 
 
 .SH SYNOPSIS
@@ -10,7 +10,11 @@ wts-start - Start process for a worktree
 
 
 .SH DESCRIPTION
-Start process for a worktree
+Start or move a process profile to a target worktree.
+
+.PP
+The currently active worktree process is stopped first, then the target process
+is started in the selected worktree directory.
 
 
 .SH OPTIONS
@@ -21,14 +25,22 @@ Start process for a worktree
 \fB-h\fP, \fB--help\fP[=false]
 	help for start
 
+.PP
+\fB--process\fP=""
+	process profile name (default: first process in config)
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts start repo-main
+  wts start ../repo-agent --process demo-script
+  wts start /abs/path/to/worktree --attach
+.EE
 
 
 .SH SEE ALSO

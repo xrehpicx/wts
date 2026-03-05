@@ -1,0 +1,63 @@
+.nh
+.TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
+
+.SH NAME
+wts-init - Generate .wts.yaml by detecting project type
+
+
+.SH SYNOPSIS
+\fBwts init [flags]\fP
+
+
+.SH DESCRIPTION
+Inspect the current (or specified) directory, detect the project type, and
+generate a .wts.yaml with inferred processes.
+
+.PP
+Built-in detectors:
+  nodejs     package.json scripts (auto-detects npm/pnpm/yarn/bun)
+  go         cmd/ sub-directories or go run .
+  python     manage.py (Django) or pyproject.toml / requirements.txt
+  makefile   Makefile targets
+
+.PP
+Custom detectors can be added as YAML files in:
+  ~/.config/wts/detectors/
+
+.PP
+See 'wts init --help' or docs/detectors.md for the file format.
+
+
+.SH OPTIONS
+\fB--dir\fP=""
+	project directory (default: current working directory)
+
+.PP
+\fB--dry-run\fP[=false]
+	print generated config without writing
+
+.PP
+\fB--force\fP[=false]
+	overwrite existing .wts.yaml
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for init
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--config\fP=""
+	path to .wts.yaml
+
+
+.SH EXAMPLE
+.EX
+wts init
+  wts init --dir ../my-project
+  wts init --force
+  wts init --dry-run
+.EE
+
+
+.SH SEE ALSO
+\fBwts(1)\fP

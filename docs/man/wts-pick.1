@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-pick - Pick a worktree and switch
+wts-pick - Pick a git worktree and switch
 
 
 .SH SYNOPSIS
@@ -10,7 +10,7 @@ wts-pick - Pick a worktree and switch
 
 
 .SH DESCRIPTION
-Pick a worktree and switch
+Open an interactive selector (fzf if installed, fallback prompt otherwise) and switch to the chosen worktree.
 
 
 .SH OPTIONS
@@ -21,14 +21,22 @@ Pick a worktree and switch
 \fB-h\fP, \fB--help\fP[=false]
 	help for pick
 
+.PP
+\fB--process\fP=""
+	process profile name (default: first process in config)
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts pick
+  wts pick --process demo-script
+  wts pick --attach
+.EE
 
 
 .SH SEE ALSO

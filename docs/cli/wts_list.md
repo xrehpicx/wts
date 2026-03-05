@@ -1,9 +1,19 @@
 ## wts list
 
-List configured worktrees for this repo
+List git worktrees for this repo
+
+### Synopsis
+
+Discover worktrees using Git and print worktree name, branch, and absolute directory.
 
 ```
 wts list [flags]
+```
+
+### Examples
+
+```
+wts list
 ```
 
 ### Options
@@ -16,10 +26,9 @@ wts list [flags]
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

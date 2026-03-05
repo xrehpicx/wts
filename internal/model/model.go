@@ -6,10 +6,9 @@ import (
 )
 
 const (
-	CurrentVersion      = 1
-	DefaultStopTimeout  = 8
-	DefaultShell        = "/bin/sh"
-	ImplicitGroupPrefix = "__self__:"
+	CurrentVersion     = 1
+	DefaultStopTimeout = 8
+	DefaultShell       = "/bin/sh"
 )
 
 type Config struct {
@@ -26,7 +25,6 @@ type Defaults struct {
 type Process struct {
 	Name    string            `yaml:"name"`
 	Command string            `yaml:"command"`
-	Group   string            `yaml:"group,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 }
 
@@ -68,14 +66,4 @@ func (p *Project) ProcessNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func EffectiveGroup(process *Process, override string, fallbackName string) string {
-	if override != "" {
-		return override
-	}
-	if process != nil && process.Group != "" {
-		return process.Group
-	}
-	return ImplicitGroupPrefix + fallbackName
 }

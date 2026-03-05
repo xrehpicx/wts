@@ -2,8 +2,33 @@
 
 Open interactive Bubble Tea TUI
 
+### Synopsis
+
+Open the interactive TUI for worktree/process handoff.
+
+The TUI lets you move selection across discovered worktrees, choose process
+profiles, and switch/restart/stop quickly.
+
+Shortcuts:
+  n/down   next worktree
+  p/up     previous worktree
+  [ / ]    previous/next process profile
+  s/enter  switch
+  r        restart
+  x        stop
+  ?        toggle shortcut help
+  q        quit
+
+Exiting TUI does not stop running worktree processes.
+
 ```
 wts tui [flags]
+```
+
+### Examples
+
+```
+wts tui
 ```
 
 ### Options
@@ -16,10 +41,9 @@ wts tui [flags]
 
 ```
       --config string   path to .wts.yaml
-      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
+* [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
 

@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"time"
 
+	"github.com/xrehpicx/wts/internal/gitwt"
 	"github.com/xrehpicx/wts/internal/model"
-	"github.com/xrehpicx/wts/internal/state"
 	"github.com/xrehpicx/wts/internal/tmux"
 )
 
@@ -21,35 +22,40 @@ type Backend interface {
 	SetSessionOption(ctx context.Context, session, key, value string) error
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
 	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
+	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
 	Attach(ctx context.Context, session, window string) error
 }
 
 type Manager struct {
-	project *model.Project
-	repo    *state.RepoState
-	backend Backend
-	session string
+	project   *model.Project
+	worktrees []gitwt.Worktree
+	backend   Backend
+	session   string
 }
 
-type SwitchOptions struct {
-	Attach bool
+type RunOptions struct {
+	Attach  bool
+	Process string
 }
 
 type StatusRow struct {
 	Worktree string `json:"worktree"`
 	Process  string `json:"process"`
-	Group    string `json:"group"`
 	Running  bool   `json:"running"`
+	Exited   bool   `json:"exited"`
 	Active   bool   `json:"active"`
+	Branch   string `json:"branch"`
 	Dir      string `json:"dir"`
 }
 
-func NewManager(project *model.Project, repo *state.RepoState, backend Backend) *Manager {
+func NewManager(project *model.Project, repoRoot string, worktrees []gitwt.Worktree, backend Backend) *Manager {
+	items := make([]gitwt.Worktree, len(worktrees))
+	copy(items, worktrees)
 	return &Manager{
-		project: project,
-		repo:    repo,
-		backend: backend,
-		session: tmux.SessionName(repo.Root),
+		project:   project,
+		worktrees: items,
+		backend:   backend,
+		session:   tmux.SessionName(repoRoot),
 	}
 }
 
@@ -57,29 +63,36 @@ func (m *Manager) Session() string {
 	return m.session
 }
 
-func (m *Manager) ListWorktrees() []state.Worktree {
-	items := make([]state.Worktree, len(m.repo.Worktrees))
-	copy(items, m.repo.Worktrees)
+func (m *Manager) ListWorktrees() []gitwt.Worktree {
+	items := make([]gitwt.Worktree, len(m.worktrees))
+	copy(items, m.worktrees)
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].Name == items[j].Name {
+			return items[i].Dir < items[j].Dir
+		}
 		return items[i].Name < items[j].Name
 	})
 	return items
 }
 
-func (m *Manager) Switch(ctx context.Context, worktree string, opts SwitchOptions) error {
+func (m *Manager) Switch(ctx context.Context, worktree string, opts RunOptions) error {
 	return m.activate(ctx, worktree, opts, false)
 }
 
-func (m *Manager) Start(ctx context.Context, worktree string, opts SwitchOptions) error {
+func (m *Manager) Start(ctx context.Context, worktree string, opts RunOptions) error {
 	return m.activate(ctx, worktree, opts, false)
 }
 
-func (m *Manager) Restart(ctx context.Context, worktree string, opts SwitchOptions) error {
+func (m *Manager) Restart(ctx context.Context, worktree string, opts RunOptions) error {
 	return m.activate(ctx, worktree, opts, true)
 }
 
-func (m *Manager) activate(ctx context.Context, worktree string, opts SwitchOptions, forceRestart bool) error {
-	wt, proc, group, err := m.resolveWorktree(worktree)
+func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions, forceRestart bool) error {
+	wt, err := m.resolveWorktree(worktree)
+	if err != nil {
+		return err
+	}
+	proc, err := m.resolveProcess(opts.Process)
 	if err != nil {
 		return err
 	}
@@ -87,16 +100,13 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts SwitchOpti
 		return err
 	}
 
-	activeKey := tmux.GroupOptionKey(group)
-	activeWorktree, err := m.backend.GetSessionOption(ctx, m.session, activeKey)
+	activeDir, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
 	if err != nil {
 		return err
 	}
-	if activeWorktree != "" && activeWorktree != wt.Name {
-		if prev, _, _, prevErr := m.resolveWorktree(activeWorktree); prevErr == nil {
-			if err := m.stopWorktreeProcess(ctx, prev); err != nil {
-				return fmt.Errorf("stop previous worktree %q: %w", prev.Name, err)
-			}
+	if activeDir != "" && filepath.Clean(activeDir) != filepath.Clean(wt.Dir) {
+		if err := m.stopWorktreeProcessByDir(ctx, activeDir); err != nil {
+			return fmt.Errorf("stop previous worktree %q: %w", activeDir, err)
 		}
 	}
 
@@ -116,15 +126,18 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts SwitchOpti
 		}
 	}
 
-	if err := m.backend.SetSessionOption(ctx, m.session, activeKey, wt.Name); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), wt.Dir); err != nil {
 		return err
 	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), wt.Name); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), proc.Name); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir), proc.Name); err != nil {
 		return err
 	}
 
 	if opts.Attach {
-		if err := m.backend.Attach(ctx, m.session, tmux.WindowName(wt.Name)); err != nil {
+		if err := m.backend.Attach(ctx, m.session, tmux.WindowName(wt.Dir)); err != nil {
 			return err
 		}
 	}
@@ -133,7 +146,7 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts SwitchOpti
 }
 
 func (m *Manager) StopWorktree(ctx context.Context, worktree string) error {
-	wt, _, group, err := m.resolveWorktree(worktree)
+	wt, err := m.resolveWorktree(worktree)
 	if err != nil {
 		return err
 	}
@@ -143,24 +156,19 @@ func (m *Manager) StopWorktree(ctx context.Context, worktree string) error {
 	if err := m.stopWorktreeProcess(ctx, wt); err != nil {
 		return err
 	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir), ""); err != nil {
+		return err
+	}
 
-	activeKey := tmux.GroupOptionKey(group)
-	active, err := m.backend.GetSessionOption(ctx, m.session, activeKey)
+	active, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
 	if err != nil {
 		return err
 	}
-	if active == wt.Name {
-		if err := m.backend.SetSessionOption(ctx, m.session, activeKey, ""); err != nil {
+	if filepath.Clean(active) == filepath.Clean(wt.Dir) {
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), ""); err != nil {
 			return err
 		}
-	}
-
-	last, err := m.backend.GetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey())
-	if err != nil {
-		return err
-	}
-	if last == wt.Name {
-		if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), ""); err != nil {
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
 			return err
 		}
 	}
@@ -168,55 +176,56 @@ func (m *Manager) StopWorktree(ctx context.Context, worktree string) error {
 	return nil
 }
 
-func (m *Manager) StopGroup(ctx context.Context, group string) error {
+func (m *Manager) StopActive(ctx context.Context) error {
 	if err := m.ensureReady(ctx); err != nil {
 		return err
 	}
-	key := tmux.GroupOptionKey(group)
-	active, err := m.backend.GetSessionOption(ctx, m.session, key)
+	active, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
 	if err != nil {
 		return err
 	}
 	if active == "" {
 		return nil
 	}
-	if _, idx := m.repo.Worktree(active); idx < 0 {
-		_ = m.backend.SetSessionOption(ctx, m.session, key, "")
-		return nil
+	if err := m.stopWorktreeProcessByDir(ctx, active); err != nil {
+		return err
 	}
-	return m.StopWorktree(ctx, active)
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ProcessOptionKey(active), ""); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), ""); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
 	if err := m.ensureReady(ctx); err != nil {
 		return err
 	}
-	for i := range m.repo.Worktrees {
-		if err := m.stopWorktreeProcess(ctx, &m.repo.Worktrees[i]); err != nil {
+	for i := range m.worktrees {
+		wt := &m.worktrees[i]
+		if err := m.stopWorktreeProcess(ctx, wt); err != nil {
+			return err
+		}
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir), ""); err != nil {
 			return err
 		}
 	}
-	groups := map[string]struct{}{}
-	for i := range m.repo.Worktrees {
-		_, proc, group, err := m.resolveWorktree(m.repo.Worktrees[i].Name)
-		if err != nil || proc == nil {
-			continue
-		}
-		groups[group] = struct{}{}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), ""); err != nil {
+		return err
 	}
-	for g := range groups {
-		if err := m.backend.SetSessionOption(ctx, m.session, tmux.GroupOptionKey(g), ""); err != nil {
-			return err
-		}
-	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), ""); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (m *Manager) Logs(ctx context.Context, worktree string, lines int) (string, error) {
-	wt, _, _, err := m.resolveWorktree(worktree)
+	wt, err := m.resolveWorktree(worktree)
 	if err != nil {
 		return "", err
 	}
@@ -228,9 +237,9 @@ func (m *Manager) Logs(ctx context.Context, worktree string, lines int) (string,
 		return "", err
 	}
 	if !running {
-		return "", fmt.Errorf("worktree %q is not running", worktree)
+		return "", fmt.Errorf("worktree %q is not running", wt.Name)
 	}
-	return m.backend.CapturePane(ctx, m.session, tmux.WindowName(wt.Name), lines)
+	return m.backend.CapturePane(ctx, m.session, tmux.WindowName(wt.Dir), lines)
 }
 
 func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, error) {
@@ -238,40 +247,73 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 		return nil, err
 	}
 
-	rows := make([]StatusRow, 0, len(m.repo.Worktrees))
-	for i := range m.repo.Worktrees {
-		wt := &m.repo.Worktrees[i]
-		if worktree != "" && wt.Name != worktree {
-			continue
-		}
-		proc, err := m.project.Process(wt.Process)
+	targetDir := ""
+	if worktree != "" {
+		wt, err := m.resolveWorktree(worktree)
 		if err != nil {
 			return nil, err
 		}
-		group := model.EffectiveGroup(proc, wt.Group, wt.Name)
+		targetDir = filepath.Clean(wt.Dir)
+	}
+
+	activeDir, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
+	if err != nil {
+		return nil, err
+	}
+	activeDir = filepath.Clean(activeDir)
+	activeProc, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]StatusRow, 0, len(m.worktrees))
+	for i := range m.worktrees {
+		wt := &m.worktrees[i]
+		if targetDir != "" && filepath.Clean(wt.Dir) != targetDir {
+			continue
+		}
 		running, err := m.isRunning(ctx, wt)
 		if err != nil {
 			return nil, err
 		}
-		active, err := m.isActive(ctx, wt, group)
-		if err != nil {
-			return nil, err
+		exited := false
+		if running {
+			exited = m.isProcessExited(ctx, wt)
 		}
+		active := filepath.Clean(wt.Dir) == activeDir
+		process := m.defaultProcessName()
+		if active && activeProc != "" {
+			process = activeProc
+		} else {
+			procByWorktree, err := m.backend.GetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir))
+			if err != nil {
+				return nil, err
+			}
+			if procByWorktree != "" {
+				process = procByWorktree
+			}
+		}
+
 		rows = append(rows, StatusRow{
 			Worktree: wt.Name,
-			Process:  wt.Process,
-			Group:    group,
+			Process:  process,
 			Running:  running,
+			Exited:   exited,
 			Active:   active,
+			Branch:   wt.Branch,
 			Dir:      wt.Dir,
 		})
 	}
 
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Worktree == rows[j].Worktree {
+			return rows[i].Dir < rows[j].Dir
+		}
+		return rows[i].Worktree < rows[j].Worktree
+	})
 	if worktree != "" && len(rows) == 0 {
 		return nil, fmt.Errorf("worktree %q not found", worktree)
 	}
-
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Worktree < rows[j].Worktree })
 	return rows, nil
 }
 
@@ -286,6 +328,13 @@ func (m *Manager) StatusJSON(ctx context.Context, worktree string) ([]byte, erro
 	return json.MarshalIndent(rows, "", "  ")
 }
 
+func (m *Manager) defaultProcessName() string {
+	if len(m.project.Processes) == 0 {
+		return ""
+	}
+	return m.project.Processes[0].Name
+}
+
 func (m *Manager) ensureReady(ctx context.Context) error {
 	if err := m.backend.EnsureTmux(ctx); err != nil {
 		return err
@@ -296,25 +345,26 @@ func (m *Manager) ensureReady(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) resolveWorktree(name string) (*state.Worktree, *model.Process, string, error) {
-	wt, _ := m.repo.Worktree(name)
-	if wt == nil {
-		return nil, nil, "", fmt.Errorf("worktree %q not found", name)
-	}
-	proc, err := m.project.Process(wt.Process)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	group := model.EffectiveGroup(proc, wt.Group, wt.Name)
-	return wt, proc, group, nil
+func (m *Manager) resolveWorktree(selector string) (*gitwt.Worktree, error) {
+	return gitwt.Resolve(m.worktrees, selector)
 }
 
-func (m *Manager) startWorktreeProcess(ctx context.Context, wt *state.Worktree, proc *model.Process) error {
-	window := tmux.WindowName(wt.Name)
+func (m *Manager) resolveProcess(name string) (*model.Process, error) {
+	processName := name
+	if processName == "" {
+		processName = m.defaultProcessName()
+	}
+	if processName == "" {
+		return nil, fmt.Errorf("no process profiles configured")
+	}
+	return m.project.Process(processName)
+}
+
+func (m *Manager) startWorktreeProcess(ctx context.Context, wt *gitwt.Worktree, proc *model.Process) error {
 	if err := m.backend.StartWindowCommand(
 		ctx,
 		m.session,
-		window,
+		tmux.WindowName(wt.Dir),
 		wt.Dir,
 		m.project.Defaults.Shell,
 		proc.Command,
@@ -325,22 +375,33 @@ func (m *Manager) startWorktreeProcess(ctx context.Context, wt *state.Worktree, 
 	return nil
 }
 
-func (m *Manager) stopWorktreeProcess(ctx context.Context, wt *state.Worktree) error {
+func (m *Manager) stopWorktreeProcess(ctx context.Context, wt *gitwt.Worktree) error {
+	return m.stopWorktreeProcessByDir(ctx, wt.Dir)
+}
+
+func (m *Manager) stopWorktreeProcessByDir(ctx context.Context, worktreeDir string) error {
 	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-	if err := m.backend.StopWindow(ctx, m.session, tmux.WindowName(wt.Name), timeout); err != nil {
-		return fmt.Errorf("stop worktree %q: %w", wt.Name, err)
+	if err := m.backend.StopWindow(ctx, m.session, tmux.WindowName(worktreeDir), timeout); err != nil {
+		return fmt.Errorf("stop worktree %q: %w", worktreeDir, err)
 	}
 	return nil
 }
 
-func (m *Manager) isRunning(ctx context.Context, wt *state.Worktree) (bool, error) {
-	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Name))
+func (m *Manager) isRunning(ctx context.Context, wt *gitwt.Worktree) (bool, error) {
+	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Dir))
 }
 
-func (m *Manager) isActive(ctx context.Context, wt *state.Worktree, group string) (bool, error) {
-	active, err := m.backend.GetSessionOption(ctx, m.session, tmux.GroupOptionKey(group))
-	if err != nil {
-		return false, err
+// shellNames are the common shell base names that indicate the process has
+// exited and the pane fell back to an interactive prompt.
+var shellNames = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true,
+	"dash": true, "ksh": true, "csh": true, "tcsh": true,
+}
+
+func (m *Manager) isProcessExited(ctx context.Context, wt *gitwt.Worktree) bool {
+	cmd, err := m.backend.PaneCurrentCommand(ctx, m.session, tmux.WindowName(wt.Dir))
+	if err != nil || cmd == "" {
+		return false
 	}
-	return active == wt.Name, nil
+	return shellNames[cmd]
 }

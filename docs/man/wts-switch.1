@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-switch - Switch to a worktree
+wts-switch - Switch to a worktree and hand off process
 
 
 .SH SYNOPSIS
@@ -10,7 +10,11 @@ wts-switch - Switch to a worktree
 
 
 .SH DESCRIPTION
-Switch to a worktree
+Start or move a process profile to a target worktree.
+
+.PP
+The currently active worktree process is stopped first, then the target process
+is started in the selected worktree directory.
 
 
 .SH OPTIONS
@@ -21,14 +25,22 @@ Switch to a worktree
 \fB-h\fP, \fB--help\fP[=false]
 	help for switch
 
+.PP
+\fB--process\fP=""
+	process profile name (default: first process in config)
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
 	path to .wts.yaml
 
-.PP
-\fB--state\fP=""
-	path to state file (default ~/.workswitch/state.yaml)
+
+.SH EXAMPLE
+.EX
+wts switch repo-main
+  wts switch ../repo-agent --process demo-script
+  wts switch /abs/path/to/worktree --attach
+.EE
 
 
 .SH SEE ALSO
