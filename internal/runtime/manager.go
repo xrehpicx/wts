@@ -63,6 +63,11 @@ func (m *Manager) Session() string {
 	return m.session
 }
 
+func (m *Manager) ActiveProcess(ctx context.Context) string {
+	name, _ := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
+	return name
+}
+
 func (m *Manager) ListWorktrees() []gitwt.Worktree {
 	items := make([]gitwt.Worktree, len(m.worktrees))
 	copy(items, m.worktrees)

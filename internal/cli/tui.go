@@ -192,14 +192,31 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 	ti.CharLimit = 64
 
 	m := &tuiModel{
-		rc:           rc,
-		keys:         newTUIKeyMap(),
-		help:         helpModel,
-		styles:       newTUIStyles(),
-		processNames: rc.project.ProcessNames(),
-		spinner:      s,
-		filterInput:  ti,
+		rc:          rc,
+		keys:        newTUIKeyMap(),
+		help:        helpModel,
+		styles:      newTUIStyles(),
+		spinner:     s,
+		filterInput: ti,
+		processIdx:  -1,
 	}
+
+	// Order processes: active process first, then config order.
+	names := rc.project.ProcessNames()
+	activeProc := rc.manager.ActiveProcess(context.Background())
+	if activeProc != "" {
+		reordered := make([]string, 0, len(names))
+		reordered = append(reordered, activeProc)
+		for _, n := range names {
+			if n != activeProc {
+				reordered = append(reordered, n)
+			}
+		}
+		m.processNames = reordered
+	} else {
+		m.processNames = names
+	}
+
 	m.refreshStatus()
 	if len(m.rows) > 0 {
 		for i := range m.rows {
@@ -209,9 +226,6 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 				break
 			}
 		}
-	}
-	if len(m.processNames) > 0 && m.processIdx >= len(m.processNames) {
-		m.processIdx = 0
 	}
 	return m
 }
@@ -361,11 +375,12 @@ func (m *tuiModel) renderHeader(width int) string {
 		botRight = m.styles.subtitle.Render(fmt.Sprintf("%d matching", count)) + " "
 	} else {
 		proc := m.selectedProcess()
-		if proc == "" {
-			proc = "-"
-		}
 		active := m.activeRow()
 		var summary string
+		procLabel := proc
+		if procLabel == "" {
+			procLabel = "no process"
+		}
 		if active != nil {
 			wt := m.styles.metaValue.Render(active.Worktree)
 			branch := m.styles.dimText.Render(" [" + active.Branch + "]")
@@ -377,9 +392,11 @@ func (m *tuiModel) renderHeader(width int) string {
 			} else {
 				dot = m.styles.stopDot.Render(" · ○ stopped")
 			}
-			summary = m.styles.title.Render(proc) + m.styles.dimText.Render(" → ") + wt + branch + dot
+			summary = m.styles.title.Render(procLabel) + m.styles.dimText.Render(" → ") + wt + branch + dot
+		} else if proc == "" {
+			summary = m.styles.dimText.Render("select a process with ←/→")
 		} else {
-			summary = m.styles.title.Render(proc) + m.styles.dimText.Render(" (idle)")
+			summary = m.styles.title.Render(procLabel) + m.styles.dimText.Render(" (idle)")
 		}
 		botLeft = " " + summary
 
@@ -467,13 +484,14 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 func (m *tuiModel) renderDetailPanel(width, height int) string {
 	maxW := max(12, width-4)
 	proc := m.selectedProcess()
-	if proc == "" {
-		proc = "-"
+	panelTitle := proc
+	if panelTitle == "" {
+		panelTitle = "←/→ to select process"
 	}
 
 	row := m.current()
 	if row == nil {
-		return m.renderPanel(proc,
+		return m.renderPanel(panelTitle,
 			[]string{m.styles.dimText.Render("No worktree selected.")},
 			width, height, false)
 	}
@@ -482,7 +500,7 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	innerHeight := max(1, height-2)
 	capacity := innerHeight - 2
 	if capacity < 4 {
-		return m.renderPanel(proc,
+		return m.renderPanel(panelTitle,
 			[]string{m.styles.dimText.Render(row.Worktree)},
 			width, height, false)
 	}
@@ -503,8 +521,9 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 
 	// Command (1 line, truncated)
 	var cmdLine string
-	procDef, err := m.rc.project.Process(proc)
-	if err != nil {
+	if proc == "" {
+		cmdLine = m.styles.dimText.Render("← / → to select a process")
+	} else if procDef, err := m.rc.project.Process(proc); err != nil {
 		cmdLine = m.styles.statusErr.Render(truncateLine(err.Error(), maxW))
 	} else {
 		cmdLine = m.styles.dimText.Render("▸ ") + m.styles.metaValue.Render(truncateLine(procDef.Command, maxW-2))
@@ -552,7 +571,7 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	}
 	lines = append(lines, hint)
 
-	return m.renderPanel(proc, lines, width, height, false)
+	return m.renderPanel(panelTitle, lines, width, height, false)
 }
 
 func (m *tuiModel) renderPanel(title string, lines []string, width, height int, focused bool) string {
@@ -643,7 +662,12 @@ func (m *tuiModel) cycleProcess(delta int) {
 		m.messageIsErr = true
 		return
 	}
-	m.processIdx = (m.processIdx + delta + len(m.processNames)) % len(m.processNames)
+	if m.processIdx < 0 {
+		// First selection: go to first process regardless of delta direction.
+		m.processIdx = 0
+	} else {
+		m.processIdx = (m.processIdx + delta + len(m.processNames)) % len(m.processNames)
+	}
 	m.message = "process: " + m.selectedProcess()
 	m.messageIsErr = false
 }
@@ -712,7 +736,13 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	dir, name, proc := row.Dir, row.Worktree, m.selectedProcess()
+	proc := m.selectedProcess()
+	if proc == "" {
+		m.message = "select a process first with ←/→"
+		m.messageIsErr = true
+		return nil
+	}
+	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
 	m.loadingMsg = "switching to " + name + "..."
@@ -730,7 +760,13 @@ func (m *tuiModel) restartCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	dir, name, proc := row.Dir, row.Worktree, m.selectedProcess()
+	proc := m.selectedProcess()
+	if proc == "" {
+		m.message = "select a process first with ←/→"
+		m.messageIsErr = true
+		return nil
+	}
+	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
 	m.loadingMsg = "restarting " + name + "..."

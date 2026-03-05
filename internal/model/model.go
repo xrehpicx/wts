@@ -1,9 +1,6 @@
 package model
 
-import (
-	"fmt"
-	"sort"
-)
+import "fmt"
 
 const (
 	CurrentVersion     = 1
@@ -64,6 +61,5 @@ func (p *Project) ProcessNames() []string {
 	for _, proc := range p.Processes {
 		names = append(names, proc.Name)
 	}
-	sort.Strings(names)
 	return names
 }
