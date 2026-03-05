@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+type PaneInfo struct {
+	ID    string
+	Title string
+	PID   string
+}
+
 type Backend interface {
 	EnsureTmux(ctx context.Context) error
 	EnsureSession(ctx context.Context, session string) error
@@ -23,6 +29,14 @@ type Backend interface {
 	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
 	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
 	Attach(ctx context.Context, session, window string) error
+
+	// Multi-process pane management
+	SetPaneTitle(ctx context.Context, session, window, title string) error
+	SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
+	ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error)
+	StopPane(ctx context.Context, paneID string, timeout time.Duration) error
+	CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error)
+	PaneExitedByPID(ctx context.Context, pid string) bool
 }
 
 type runner interface {
@@ -235,6 +249,105 @@ func (c *Client) Attach(ctx context.Context, session, window string) error {
 		return fmt.Errorf("attach tmux session %q: %w", session, err)
 	}
 	return nil
+}
+
+func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string) error {
+	_, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", session+":"+window, "-T", title)
+	if err != nil {
+		return fmt.Errorf("set pane title %q: %w", title, err)
+	}
+	return nil
+}
+
+func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
+	// Split and capture the new pane ID.
+	paneID, err := c.runner.Run(ctx, c.bin, "split-window", "-d", "-t", session+":"+window, "-c", dir, "-P", "-F", "#{pane_id}")
+	if err != nil {
+		return fmt.Errorf("split window %q: %w", window, err)
+	}
+	paneID = strings.TrimSpace(paneID)
+
+	if _, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", paneID, "-T", paneTitle); err != nil {
+		return fmt.Errorf("set pane title %q: %w", paneTitle, err)
+	}
+
+	payload := buildPayload(command, env)
+	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
+		return fmt.Errorf("start command in pane %q: %w", paneTitle, err)
+	}
+	return nil
+}
+
+func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{pane_title}\t#{pane_pid}")
+	if err != nil {
+		return nil, fmt.Errorf("list panes for %q: %w", window, err)
+	}
+	var panes []PaneInfo
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		panes = append(panes, PaneInfo{
+			ID:    parts[0],
+			Title: parts[1],
+			PID:   parts[2],
+		})
+	}
+	return panes, nil
+}
+
+func (c *Client) StopPane(ctx context.Context, paneID string, timeout time.Duration) error {
+	// Get the pane's PID before sending interrupt.
+	pidOut, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", paneID, "-F", "#{pane_pid}")
+	if err != nil {
+		// Pane may already be gone.
+		return nil
+	}
+	pid := strings.TrimSpace(pidOut)
+
+	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, "C-c"); err != nil {
+		return nil
+	}
+
+	if pid != "" {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			if !c.PaneExitedByPID(ctx, pid) {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			break
+		}
+	}
+
+	// Kill the pane (harmless if already gone).
+	_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
+	return nil
+}
+
+func (c *Client) CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error) {
+	if lines <= 0 {
+		lines = 200
+	}
+	output, err := c.runner.Run(ctx, c.bin, "capture-pane", "-p", "-t", paneID, "-S", fmt.Sprintf("-%d", lines))
+	if err != nil {
+		return "", fmt.Errorf("capture pane %q: %w", paneID, err)
+	}
+	return output, nil
+}
+
+func (c *Client) PaneExitedByPID(ctx context.Context, pid string) bool {
+	children, err := c.runner.Run(ctx, "pgrep", "-P", pid)
+	if err != nil {
+		return true // pgrep exits 1 when no children
+	}
+	return strings.TrimSpace(children) == ""
 }
 
 func buildPayload(command string, env map[string]string) string {

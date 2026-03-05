@@ -87,6 +87,7 @@ type tuiKeyMap struct {
 	Switch   key.Binding
 	Restart  key.Binding
 	Stop     key.Binding
+	StopAll  key.Binding
 	ProcPrev key.Binding
 	ProcNext key.Binding
 	Filter   key.Binding
@@ -98,9 +99,10 @@ func newTUIKeyMap() tuiKeyMap {
 	return tuiKeyMap{
 		Next:     key.NewBinding(key.WithKeys("n", "j", "down"), key.WithHelp("j/↓", "next")),
 		Prev:     key.NewBinding(key.WithKeys("p", "k", "up"), key.WithHelp("k/↑", "prev")),
-		Switch:   key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/↵", "switch")),
+		Switch:   key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/↵", "start/switch")),
 		Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
-		Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
+		Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop process")),
+		StopAll:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop all")),
 		ProcPrev: key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev process")),
 		ProcNext: key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next process")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search process")),
@@ -110,12 +112,12 @@ func newTUIKeyMap() tuiKeyMap {
 }
 
 func (k tuiKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.ProcPrev, k.ProcNext, k.Filter, k.Help, k.Quit}
+	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.ProcPrev, k.ProcNext, k.Filter, k.Help, k.Quit}
 }
 
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop},
+		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll},
 		{k.ProcPrev, k.ProcNext, k.Filter, k.Help, k.Quit},
 	}
 }
@@ -318,6 +320,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.switchCurrentCmd()
 		case key.Matches(msg, m.keys.Restart):
 			return m, m.restartCurrentCmd()
+		case key.Matches(msg, m.keys.StopAll):
+			return m, m.stopAllCurrentCmd()
 		case key.Matches(msg, m.keys.Stop):
 			return m, m.stopCurrentCmd()
 		case key.Matches(msg, m.keys.ProcNext):
@@ -385,8 +389,11 @@ func (m *tuiModel) renderHeader(width int) string {
 			wt := m.styles.metaValue.Render(active.Worktree)
 			branch := m.styles.dimText.Render(" [" + active.Branch + "]")
 			var dot string
+			nprocs := len(active.Processes)
 			if active.Running && active.Exited {
 				dot = m.styles.exitedDot.Render(" · ● exited")
+			} else if active.Running && nprocs > 1 {
+				dot = m.styles.runDot.Render(fmt.Sprintf(" · ● %d running", nprocs))
 			} else if active.Running {
 				dot = m.styles.runDot.Render(" · ● running")
 			} else {
@@ -464,10 +471,17 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 			dot = m.styles.stopDot.Render("○")
 		}
 
-		line := fmt.Sprintf("%s%s %-*s %s",
+		// Show process count if multiple are running.
+		procCount := ""
+		if len(row.Processes) > 1 {
+			procCount = m.styles.dimText.Render(fmt.Sprintf(" ×%d", len(row.Processes)))
+		}
+
+		line := fmt.Sprintf("%s%s %-*s %s%s",
 			cursor, dot,
 			nameWidth, truncateLine(row.Worktree, nameWidth),
 			truncateLine(row.Branch, max(1, maxTextWidth-nameWidth-5)),
+			procCount,
 		)
 
 		if i == m.idx {
@@ -496,7 +510,6 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 			width, height, false)
 	}
 
-	// capacity = lines available inside the panel after title + blank
 	innerHeight := max(1, height-2)
 	capacity := innerHeight - 2
 	if capacity < 4 {
@@ -505,21 +518,32 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 			width, height, false)
 	}
 
-	// Compact meta: [branch] · status · dir  (1 line)
-	var statusDot string
-	if row.Running && row.Exited {
-		statusDot = m.styles.exitedDot.Render("● exited")
-	} else if row.Running {
-		statusDot = m.styles.runDot.Render("● running")
-	} else {
-		statusDot = m.styles.stopDot.Render("○ stopped")
-	}
+	// Meta line: branch · dir
 	meta := m.styles.metaValue.Render(row.Branch) +
-		m.styles.dimText.Render(" · ") + statusDot +
 		m.styles.dimText.Render(" · ") +
-		m.styles.dimText.Render(truncateLine(shortenPath(row.Dir), max(1, maxW-lipgloss.Width(row.Branch)-22)))
+		m.styles.dimText.Render(truncateLine(shortenPath(row.Dir), max(1, maxW-lipgloss.Width(row.Branch)-4)))
 
-	// Command (1 line, truncated)
+	// Running processes summary
+	var procSummary string
+	if len(row.Processes) > 0 {
+		parts := make([]string, 0, len(row.Processes))
+		for _, p := range row.Processes {
+			var dot string
+			if p.Running && p.Exited {
+				dot = m.styles.exitedDot.Render("●")
+			} else if p.Running {
+				dot = m.styles.runDot.Render("●")
+			} else {
+				dot = m.styles.stopDot.Render("○")
+			}
+			parts = append(parts, dot+" "+p.Name)
+		}
+		procSummary = strings.Join(parts, m.styles.dimText.Render("  "))
+	} else if !row.Running {
+		procSummary = m.styles.stopDot.Render("○") + m.styles.dimText.Render(" no processes running")
+	}
+
+	// Command for selected process
 	var cmdLine string
 	if proc == "" {
 		cmdLine = m.styles.dimText.Render("← / → to select a process")
@@ -529,8 +553,11 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 		cmdLine = m.styles.dimText.Render("▸ ") + m.styles.metaValue.Render(truncateLine(procDef.Command, maxW-2))
 	}
 
-	// Output separator with label
+	// Output separator
 	label := " output "
+	if proc != "" {
+		label = " " + proc + " "
+	}
 	sepW := max(0, maxW-runeLen(label))
 	leftSep := max(0, sepW/5)
 	rightSep := max(0, sepW-leftSep)
@@ -538,21 +565,25 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 		m.styles.dimText.Render(label) +
 		m.styles.separator.Render(strings.Repeat("─", rightSep))
 
-	// Action hint (always at bottom)
+	// Action hint
 	var hint string
 	if row.Running && row.Exited {
-		hint = m.styles.dimText.Render("r restart · x stop · process exited, shell still open")
+		hint = m.styles.dimText.Render("r restart · x stop · process exited")
 	} else if row.Running {
-		hint = m.styles.dimText.Render("r restart · x stop")
+		hint = m.styles.dimText.Render("s/↵ add process · r restart · x stop")
 	} else {
-		hint = m.styles.dimText.Render("s/↵ switch here")
+		hint = m.styles.dimText.Render("s/↵ start process")
 	}
 
-	// Build lines: meta(1) + cmd(1) + sep(1) + [logs...] + hint(1) = 4 fixed
+	// Build lines: meta(1) + procs(1) + cmd(1) + sep(1) + [logs...] + hint(1)
 	lines := make([]string, 0, capacity)
-	lines = append(lines, meta, cmdLine, outputSep)
+	lines = append(lines, meta)
+	if procSummary != "" {
+		lines = append(lines, procSummary)
+	}
+	lines = append(lines, cmdLine, outputSep)
 
-	logSpace := capacity - len(lines) - 1 // -1 for hint at bottom
+	logSpace := capacity - len(lines) - 1
 	if logSpace > 0 {
 		cur := m.current()
 		if cur != nil && cur.Dir == m.logDir && len(m.logLines) > 0 {
@@ -565,7 +596,6 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 		}
 	}
 
-	// Pad to push hint to bottom
 	for len(lines) < capacity-1 {
 		lines = append(lines, "")
 	}
@@ -745,10 +775,28 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
-	m.loadingMsg = "switching to " + name + "..."
+
+	// If the worktree already has processes running, use Start (additive).
+	// Otherwise use Switch (preemptive: stops other active worktree).
+	useAdditive := row.Running
+	if useAdditive {
+		m.loadingMsg = "starting " + proc + " in " + name + "..."
+	} else {
+		m.loadingMsg = "switching to " + name + "..."
+	}
+
 	action := func() tea.Msg {
-		if err := m.rc.manager.Switch(context.Background(), dir, runtime.RunOptions{Process: proc}); err != nil {
+		var err error
+		if useAdditive {
+			err = m.rc.manager.Start(context.Background(), dir, runtime.RunOptions{Process: proc})
+		} else {
+			err = m.rc.manager.Switch(context.Background(), dir, runtime.RunOptions{Process: proc})
+		}
+		if err != nil {
 			return actionErrMsg{err: err}
+		}
+		if useAdditive {
+			return actionDoneMsg{text: "started " + proc + " in " + name}
 		}
 		return actionDoneMsg{text: "switched to " + name}
 	}
@@ -784,15 +832,39 @@ func (m *tuiModel) stopCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
+	proc := m.selectedProcess()
+	if proc == "" {
+		m.message = "select a process first with ←/→"
+		m.messageIsErr = true
+		return nil
+	}
 	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
-	m.loadingMsg = "stopping " + name + "..."
+	m.loadingMsg = "stopping " + proc + " in " + name + "..."
+	action := func() tea.Msg {
+		if err := m.rc.manager.StopProcess(context.Background(), dir, proc); err != nil {
+			return actionErrMsg{err: err}
+		}
+		return actionDoneMsg{text: "stopped " + proc + " in " + name}
+	}
+	return tea.Batch(m.spinner.Tick, action)
+}
+
+func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
+	row := m.current()
+	if row == nil {
+		return nil
+	}
+	dir, name := row.Dir, row.Worktree
+	m.loading = true
+	m.loadingDir = dir
+	m.loadingMsg = "stopping all in " + name + "..."
 	action := func() tea.Msg {
 		if err := m.rc.manager.StopWorktree(context.Background(), dir); err != nil {
 			return actionErrMsg{err: err}
 		}
-		return actionDoneMsg{text: "stopped " + name}
+		return actionDoneMsg{text: "stopped all in " + name}
 	}
 	return tea.Batch(m.spinner.Tick, action)
 }
@@ -805,8 +877,9 @@ func (m *tuiModel) fetchLogsCmd() tea.Cmd {
 		return nil
 	}
 	dir := row.Dir
+	proc := m.selectedProcess()
 	return func() tea.Msg {
-		output, err := m.rc.manager.Logs(context.Background(), dir, 200)
+		output, err := m.rc.manager.Logs(context.Background(), dir, proc, 200)
 		if err != nil {
 			return logsMsg{dir: dir}
 		}

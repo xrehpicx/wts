@@ -7,6 +7,20 @@ import (
 	"strings"
 )
 
+// ProcessPaneTitle returns the tmux pane title for a managed process.
+func ProcessPaneTitle(processName string) string {
+	return "wts:" + processName
+}
+
+// ProcessFromPaneTitle extracts the process name from a wts pane title.
+// Returns empty string if the title is not a wts-managed pane.
+func ProcessFromPaneTitle(title string) string {
+	if strings.HasPrefix(title, "wts:") {
+		return title[4:]
+	}
+	return ""
+}
+
 func SessionName(repoRoot string) string {
 	base := sanitize(filepath.Base(repoRoot))
 	hash := sha1.Sum([]byte(repoRoot))

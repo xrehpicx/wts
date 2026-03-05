@@ -15,6 +15,7 @@ type mockBackend struct {
 	options    map[string]string
 	startCount map[string]int
 	stopCount  map[string]int
+	panes      map[string][]tmux.PaneInfo // window -> panes
 }
 
 func newMockBackend() *mockBackend {
@@ -23,6 +24,7 @@ func newMockBackend() *mockBackend {
 		options:    map[string]string{},
 		startCount: map[string]int{},
 		stopCount:  map[string]int{},
+		panes:      map[string][]tmux.PaneInfo{},
 	}
 }
 
@@ -41,6 +43,7 @@ func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ 
 func (m *mockBackend) StopWindow(_ context.Context, _ string, window string, _ time.Duration) error {
 	m.windows[window] = false
 	m.stopCount[window]++
+	delete(m.panes, window)
 	return nil
 }
 func (m *mockBackend) SetSessionOption(_ context.Context, _ string, key, value string) error {
@@ -61,6 +64,49 @@ func (m *mockBackend) PaneCurrentCommand(context.Context, string, string) (strin
 	return "", nil
 }
 func (m *mockBackend) Attach(context.Context, string, string) error { return nil }
+
+func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) error {
+	if len(m.panes[window]) > 0 {
+		m.panes[window][len(m.panes[window])-1].Title = title
+	} else {
+		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Title: title, PID: "1000"}}
+	}
+	return nil
+}
+func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ string, _ map[string]string, paneTitle string) error {
+	id := len(m.panes[window])
+	m.panes[window] = append(m.panes[window], tmux.PaneInfo{
+		ID:    "%" + string(rune('0'+id)),
+		Title: paneTitle,
+		PID:   "1001",
+	})
+	m.startCount[window]++
+	return nil
+}
+func (m *mockBackend) ListPanes(_ context.Context, _, window string) ([]tmux.PaneInfo, error) {
+	return m.panes[window], nil
+}
+func (m *mockBackend) StopPane(_ context.Context, paneID string, _ time.Duration) error {
+	for w, panes := range m.panes {
+		for i, p := range panes {
+			if p.ID == paneID {
+				m.panes[w] = append(panes[:i], panes[i+1:]...)
+				if len(m.panes[w]) == 0 {
+					delete(m.panes, w)
+					m.windows[w] = false
+				}
+				return nil
+			}
+		}
+	}
+	return nil
+}
+func (m *mockBackend) CapturePaneByID(context.Context, string, int) (string, error) {
+	return "", nil
+}
+func (m *mockBackend) PaneExitedByPID(context.Context, string) bool {
+	return false
+}
 
 func testProject() *model.Project {
 	cfg := model.Config{
@@ -138,8 +184,59 @@ func TestSwitchUsesRequestedProcess(t *testing.T) {
 	if backend.options[tmux.ActiveProcessOptionKey()] != "web" {
 		t.Fatalf("unexpected active process: %q", backend.options[tmux.ActiveProcessOptionKey()])
 	}
-	if backend.options[tmux.ProcessOptionKey("/tmp/repo-agent")] != "web" {
-		t.Fatalf("unexpected process option for worktree")
+}
+
+func TestStartIsAdditive(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	// Start api in repo-main.
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	// Start web in same worktree (should add a pane, not replace).
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	panes := backend.panes[window]
+	if len(panes) != 2 {
+		t.Fatalf("expected 2 panes, got %d", len(panes))
+	}
+	if tmux.ProcessFromPaneTitle(panes[0].Title) != "api" {
+		t.Fatalf("expected first pane to be api, got %q", panes[0].Title)
+	}
+	if tmux.ProcessFromPaneTitle(panes[1].Title) != "web" {
+		t.Fatalf("expected second pane to be web, got %q", panes[1].Title)
+	}
+}
+
+func TestStopProcessStopsOnlyOnePane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+	if err := manager.StopProcess(ctx, "repo-main", "api"); err != nil {
+		t.Fatalf("stop api: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	panes := backend.panes[window]
+	if len(panes) != 1 {
+		t.Fatalf("expected 1 pane after stopping api, got %d", len(panes))
+	}
+	if tmux.ProcessFromPaneTitle(panes[0].Title) != "web" {
+		t.Fatalf("expected remaining pane to be web, got %q", panes[0].Title)
 	}
 }
 

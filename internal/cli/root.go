@@ -192,7 +192,7 @@ func (a *app) newSwitchCmd() *cobra.Command {
 }
 
 func (a *app) newStartCmd() *cobra.Command {
-	return a.newRunCmd("start", "Start process in a worktree (preempts active)", (*runtime.Manager).Start)
+	return a.newRunCmd("start", "Start process in a worktree (additive)", (*runtime.Manager).Start)
 }
 
 func (a *app) newRestartCmd() *cobra.Command {
@@ -210,8 +210,9 @@ func (a *app) newRunCmd(name, short string, fn func(*runtime.Manager, context.Co
 		Long: strings.TrimSpace(`
 Start or move a process profile to a target worktree.
 
-The currently active worktree process is stopped first, then the target process
-is started in the selected worktree directory.`),
+'switch' preempts: stops the previously active worktree, then starts the process.
+'start' is additive: starts the process alongside any already running processes.
+'restart' stops and re-starts a specific process.`),
 		Example: strings.TrimSpace(fmt.Sprintf(`
   wts %s repo-main
   wts %s ../repo-agent --process demo-script
@@ -332,7 +333,10 @@ func (a *app) cycleAndSwitch(ctx context.Context, delta int, opts runtime.RunOpt
 }
 
 func (a *app) newStopCmd() *cobra.Command {
-	var all bool
+	var (
+		all     bool
+		process string
+	)
 	cmd := &cobra.Command{
 		Use:   "stop [worktree]",
 		Short: "Stop worktree process(es)",
@@ -341,10 +345,12 @@ Stop process windows managed by wts.
 
 With no arguments it stops the active worktree process.
 With a selector it stops only that worktree.
+With --process it stops a specific process in the worktree.
 With --all it stops all discovered worktree windows.`),
 		Example: strings.TrimSpace(`
   wts stop
   wts stop repo-main
+  wts stop repo-main --process api
   wts stop /abs/path/to/worktree
   wts stop --all
 `),
@@ -353,6 +359,7 @@ With --all it stops all discovered worktree windows.`),
 			if all && len(args) > 0 {
 				return fmt.Errorf("--all cannot be combined with a worktree selector")
 			}
+			proc := strings.TrimSpace(process)
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
 				switch {
 				case all:
@@ -360,6 +367,11 @@ With --all it stops all discovered worktree windows.`),
 						return err
 					}
 					_, _ = fmt.Fprintln(a.out, "✓ stopped all worktrees")
+				case len(args) == 1 && proc != "":
+					if err := rc.manager.StopProcess(cmd.Context(), args[0], proc); err != nil {
+						return err
+					}
+					_, _ = fmt.Fprintf(a.out, "✓ stopped %s in %s\n", proc, args[0])
 				case len(args) == 1:
 					if err := rc.manager.StopWorktree(cmd.Context(), args[0]); err != nil {
 						return err
@@ -376,6 +388,7 @@ With --all it stops all discovered worktree windows.`),
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "stop all discovered worktrees")
+	cmd.Flags().StringVar(&process, "process", "", "stop a specific process (requires worktree argument)")
 	return cmd
 }
 
@@ -410,31 +423,47 @@ func (a *app) newStatusCmd() *cobra.Command {
 					return err
 				}
 				tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
-				_, _ = fmt.Fprintln(tw, "  \tWORKTREE\tPROCESS\tSTATUS\tBRANCH\tDIR")
+				_, _ = fmt.Fprintln(tw, "  \tWORKTREE\tPROCESSES\tSTATUS\tBRANCH\tDIR")
 				for _, row := range rows {
-					var status, marker string
-					if row.Running && row.Exited {
-						status = "● exited"
-					} else if row.Running {
-						status = "● running"
-					} else {
-						status = "○ stopped"
-					}
+					var marker string
 					if row.Active {
 						marker = "★"
 					} else {
 						marker = " "
 					}
-					_, _ = fmt.Fprintf(
-						tw,
-						"%s\t%s\t%s\t%s\t%s\t%s\n",
-						marker,
-						row.Worktree,
-						row.Process,
-						status,
-						row.Branch,
-						row.Dir,
-					)
+					if len(row.Processes) > 0 {
+						for pi, p := range row.Processes {
+							var status string
+							if p.Running && p.Exited {
+								status = "● exited"
+							} else if p.Running {
+								status = "● running"
+							} else {
+								status = "○ stopped"
+							}
+							wtName := row.Worktree
+							branch := row.Branch
+							dir := row.Dir
+							m := marker
+							if pi > 0 {
+								wtName = ""
+								branch = ""
+								dir = ""
+								m = " "
+							}
+							_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+								m, wtName, p.Name, status, branch, dir)
+						}
+					} else {
+						var status string
+						if row.Running {
+							status = "● running"
+						} else {
+							status = "○ stopped"
+						}
+						_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+							marker, row.Worktree, row.Process, status, row.Branch, row.Dir)
+					}
 				}
 				return tw.Flush()
 			})
@@ -445,19 +474,23 @@ func (a *app) newStatusCmd() *cobra.Command {
 }
 
 func (a *app) newLogsCmd() *cobra.Command {
-	var lines int
+	var (
+		lines   int
+		process string
+	)
 	cmd := &cobra.Command{
 		Use:   "logs <worktree>",
 		Short: "Show recent tmux pane output for a worktree",
 		Long:  "Capture recent output lines from the tmux window for a running worktree process.",
 		Example: strings.TrimSpace(`
   wts logs repo-main
+  wts logs repo-main --process api
   wts logs ../repo-agent --lines 400
 `),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
-				output, err := rc.manager.Logs(cmd.Context(), args[0], lines)
+				output, err := rc.manager.Logs(cmd.Context(), args[0], strings.TrimSpace(process), lines)
 				if err != nil {
 					return err
 				}
@@ -467,6 +500,7 @@ func (a *app) newLogsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&lines, "lines", 200, "number of log lines")
+	cmd.Flags().StringVar(&process, "process", "", "process name (default: first pane)")
 	return cmd
 }
 
@@ -524,13 +558,15 @@ func (a *app) newTUICmd() *cobra.Command {
 Open the interactive TUI for worktree/process handoff.
 
 The TUI lets you move selection across discovered worktrees, choose process
-profiles, and switch/restart/stop quickly.
+profiles, and start/restart/stop quickly. Multiple processes can run
+simultaneously in the same worktree as separate tmux panes.
 
 Shortcuts:
-  n/down   next worktree        [ / ]  cycle process profile
-  p/up     previous worktree    /      search process by name
-  s/enter  switch               r      restart
-  x        stop                 ?      toggle full help
+  j/↓      next worktree        h/←    prev process
+  k/↑      prev worktree        l/→    next process
+  s/enter  start/switch          r      restart process
+  x        stop selected process /      search process by name
+  X        stop all in worktree  ?      toggle full help
   q        quit
 
 Exiting TUI does not stop running worktree processes.`),
