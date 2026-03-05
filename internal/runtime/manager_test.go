@@ -259,3 +259,290 @@ func TestStopActiveClearsActiveOptions(t *testing.T) {
 		t.Fatalf("expected active process cleared")
 	}
 }
+
+func TestStartDoesNotPreemptOtherWorktrees(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	// Start api in repo-main.
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start repo-main: %v", err)
+	}
+	// Start web in repo-agent — should NOT stop repo-main.
+	if err := manager.Start(ctx, "repo-agent", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start repo-agent: %v", err)
+	}
+
+	winMain := tmux.WindowName("/tmp/repo-main")
+	winAgent := tmux.WindowName("/tmp/repo-agent")
+	if !backend.windows[winMain] {
+		t.Fatalf("expected repo-main still running after Start on repo-agent")
+	}
+	if !backend.windows[winAgent] {
+		t.Fatalf("expected repo-agent running")
+	}
+}
+
+func TestStartSameProcessIsIdempotent(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api 1: %v", err)
+	}
+	// Start api again — should not create a second pane.
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api 2: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	panes := backend.panes[window]
+	if len(panes) != 1 {
+		t.Fatalf("expected 1 pane (idempotent), got %d", len(panes))
+	}
+}
+
+func TestRestartStopsAndRestartsProcess(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	// Start api and web.
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	if len(backend.panes[window]) != 2 {
+		t.Fatalf("expected 2 panes before restart, got %d", len(backend.panes[window]))
+	}
+
+	// Restart api — should stop old api pane and create new one.
+	if err := manager.Restart(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("restart api: %v", err)
+	}
+
+	panes := backend.panes[window]
+	if len(panes) != 2 {
+		t.Fatalf("expected 2 panes after restart, got %d", len(panes))
+	}
+	// web should still be there, and api should be re-created.
+	names := map[string]bool{}
+	for _, p := range panes {
+		names[tmux.ProcessFromPaneTitle(p.Title)] = true
+	}
+	if !names["api"] {
+		t.Fatalf("expected api pane after restart")
+	}
+	if !names["web"] {
+		t.Fatalf("expected web pane preserved after restart")
+	}
+}
+
+func TestStopWorktreeKillsAllPanes(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+	if err := manager.StopWorktree(ctx, "repo-main"); err != nil {
+		t.Fatalf("stop worktree: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	if backend.windows[window] {
+		t.Fatalf("expected window killed")
+	}
+	if len(backend.panes[window]) != 0 {
+		t.Fatalf("expected all panes cleared")
+	}
+}
+
+func TestStopAllKillsEverything(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start repo-main: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-agent", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start repo-agent: %v", err)
+	}
+	if err := manager.StopAll(ctx); err != nil {
+		t.Fatalf("stop all: %v", err)
+	}
+
+	for _, wt := range testWorktrees() {
+		window := tmux.WindowName(wt.Dir)
+		if backend.windows[window] {
+			t.Fatalf("expected %q stopped after StopAll", wt.Name)
+		}
+	}
+	if backend.options[tmux.ActiveWorktreeOptionKey()] != "" {
+		t.Fatalf("expected active worktree cleared")
+	}
+}
+
+func TestStopProcessErrorsWhenNotRunning(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	err := manager.StopProcess(ctx, "repo-main", "web")
+	if err == nil {
+		t.Fatalf("expected error stopping non-running process")
+	}
+}
+
+func TestStatusReportsMultipleProcesses(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+
+	rows, err := manager.Status(ctx, "repo-main")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row for repo-main, got %d", len(rows))
+	}
+	row := rows[0]
+	if !row.Running {
+		t.Fatalf("expected running")
+	}
+	if len(row.Processes) != 2 {
+		t.Fatalf("expected 2 processes, got %d", len(row.Processes))
+	}
+	if row.Processes[0].Name != "api" || row.Processes[1].Name != "web" {
+		t.Fatalf("unexpected process names: %v", row.Processes)
+	}
+	if row.Process != "api, web" {
+		t.Fatalf("unexpected combined process string: %q", row.Process)
+	}
+}
+
+func TestStatusStoppedWorktreeHasNoProcesses(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	rows, err := manager.Status(ctx, "repo-main")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].Running {
+		t.Fatalf("expected not running")
+	}
+	if len(rows[0].Processes) != 0 {
+		t.Fatalf("expected no processes, got %d", len(rows[0].Processes))
+	}
+}
+
+func TestLogsWithProcessTargetsSpecificPane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+
+	// Logs with specific process should not error.
+	_, err := manager.Logs(ctx, "repo-main", "api", 100)
+	if err != nil {
+		t.Fatalf("logs with process: %v", err)
+	}
+
+	// Logs with non-running process should error.
+	_, err = manager.Logs(ctx, "repo-main", "web", 100)
+	if err == nil {
+		t.Fatalf("expected error for non-running process logs")
+	}
+}
+
+func TestLogsWithoutProcessFallsBackToWindow(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+
+	// Logs without process should use window capture (not error).
+	_, err := manager.Logs(ctx, "repo-main", "", 100)
+	if err != nil {
+		t.Fatalf("logs without process: %v", err)
+	}
+}
+
+func TestLogsErrorsWhenWorktreeNotRunning(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	_, err := manager.Logs(ctx, "repo-main", "", 100)
+	if err == nil {
+		t.Fatalf("expected error for stopped worktree")
+	}
+}
+
+func TestSwitchPreemptsButStartDoesNot(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	// Start in repo-main.
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start repo-main: %v", err)
+	}
+	// Switch to repo-agent — should preempt repo-main.
+	if err := manager.Switch(ctx, "repo-agent", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("switch repo-agent: %v", err)
+	}
+
+	winMain := tmux.WindowName("/tmp/repo-main")
+	winAgent := tmux.WindowName("/tmp/repo-agent")
+	if backend.windows[winMain] {
+		t.Fatalf("Switch should have stopped repo-main")
+	}
+	if !backend.windows[winAgent] {
+		t.Fatalf("expected repo-agent running")
+	}
+}
