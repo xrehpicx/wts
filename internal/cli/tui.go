@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -62,55 +63,91 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 }
 
 func newTUIStyles() tuiStyles {
+	if os.Getenv("NO_COLOR") != "" {
+		base := lipgloss.NewStyle()
+		bold := lipgloss.NewStyle().Bold(true)
+		return tuiStyles{
+			header:       bold,
+			headerSub:    base,
+			panelTitle:   bold,
+			panelBorder:  lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1),
+			panelBorderF: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Bold(true),
+			selectedRow:  bold,
+			row:          base,
+			colHeader:    bold,
+			badgeRunning: bold,
+			badgeStopped: base,
+			badgeActive:  bold,
+			iconRunning:  bold,
+			iconStopped:  base,
+			iconActive:   bold,
+			iconInactive: base,
+			metaLabel:    bold,
+			metaValue:    base,
+			footer:       base,
+			error:        bold,
+			notice:       base,
+			key:          bold,
+		}
+	}
+
+	ac := func(light, dark string) lipgloss.AdaptiveColor {
+		return lipgloss.AdaptiveColor{Light: light, Dark: dark}
+	}
+
 	return tuiStyles{
 		header: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("255")).
-			Background(lipgloss.Color("31")).
+			Foreground(ac("#0B3954", "#B7D5FF")).
 			Padding(0, 1),
-		headerSub: lipgloss.NewStyle().Foreground(lipgloss.Color("153")),
+		headerSub: lipgloss.NewStyle().Foreground(ac("#4A5568", "#8FA3BF")),
 		panelTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("153")),
+			Foreground(ac("#1D4E89", "#A4C2F4")),
 		panelBorder: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63")).
+			BorderForeground(ac("#B8C5D6", "#3A4E68")).
 			Padding(0, 1),
 		panelBorderF: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("111")).
+			BorderForeground(ac("#5A84B5", "#6FA8DC")).
 			Padding(0, 1),
 		selectedRow: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("255")).
-			Background(lipgloss.Color("57")).
+			Foreground(ac("#102A43", "#F0F6FF")).
+			Background(ac("#DCEEFF", "#24364A")).
 			Bold(true),
-		row:       lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
-		colHeader: lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Bold(true),
+		row:       lipgloss.NewStyle().Foreground(ac("#1F2937", "#CED7E2")),
+		colHeader: lipgloss.NewStyle().Foreground(ac("#3E5C76", "#8FB3D9")).Bold(true),
 		badgeRunning: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("16")).
-			Background(lipgloss.Color("83")).
-			Padding(0, 1),
+			Foreground(ac("#0F5132", "#8DE1B0")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ac("#81C995", "#3A7A5A")).
+			Padding(0, 1).
+			Bold(true),
 		badgeStopped: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("16")).
-			Background(lipgloss.Color("246")).
+			Foreground(ac("#4B5563", "#9AA6B2")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ac("#CBD5E1", "#4C5A6A")).
 			Padding(0, 1),
 		badgeActive: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("16")).
-			Background(lipgloss.Color("228")).
-			Padding(0, 1),
-		iconRunning:  lipgloss.NewStyle().Foreground(lipgloss.Color("83")).Bold(true),
-		iconStopped:  lipgloss.NewStyle().Foreground(lipgloss.Color("246")),
-		iconActive:   lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true),
-		iconInactive: lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
-		metaLabel:    lipgloss.NewStyle().Foreground(lipgloss.Color("111")),
-		metaValue:    lipgloss.NewStyle().Foreground(lipgloss.Color("255")),
-		footer:       lipgloss.NewStyle().Foreground(lipgloss.Color("246")),
-		error:        lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true),
-		notice:       lipgloss.NewStyle().Foreground(lipgloss.Color("149")),
+			Foreground(ac("#7A4A00", "#FFD580")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ac("#D8B46A", "#8A6E37")).
+			Padding(0, 1).
+			Bold(true),
+		iconRunning:  lipgloss.NewStyle().Foreground(ac("#0E9F6E", "#7FE8B5")).Bold(true),
+		iconStopped:  lipgloss.NewStyle().Foreground(ac("#94A3B8", "#6B7C8F")),
+		iconActive:   lipgloss.NewStyle().Foreground(ac("#D97706", "#FFD27D")).Bold(true),
+		iconInactive: lipgloss.NewStyle().Foreground(ac("#A0AEC0", "#5E7186")),
+		metaLabel:    lipgloss.NewStyle().Foreground(ac("#46607A", "#8FB0D1")),
+		metaValue:    lipgloss.NewStyle().Foreground(ac("#0F172A", "#E6EEF7")),
+		footer:       lipgloss.NewStyle().Foreground(ac("#4B5563", "#9AA6B2")),
+		error:        lipgloss.NewStyle().Foreground(ac("#B91C1C", "#FF8B8B")).Bold(true),
+		notice:       lipgloss.NewStyle().Foreground(ac("#166534", "#8DE1B0")),
 		key: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("238")).
-			Padding(0, 1),
+			Foreground(ac("#1E3A8A", "#C7DDFF")).
+			Underline(true).
+			Bold(true),
 	}
 }
 
