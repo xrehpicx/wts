@@ -1,15 +1,15 @@
-## wts validate
+## wts tui
 
-Validate .wts.yaml
+Open interactive Bubble Tea TUI
 
 ```
-wts validate [flags]
+wts tui [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help   help for tui
 ```
 
 ### Options inherited from parent commands

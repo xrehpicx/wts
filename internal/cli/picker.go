@@ -30,7 +30,7 @@ func NewPicker(in io.Reader, out, errOut io.Writer) *Picker {
 
 func (p *Picker) Select(names []string) (string, error) {
 	if len(names) == 0 {
-		return "", fmt.Errorf("no workspaces configured")
+		return "", fmt.Errorf("no worktrees configured")
 	}
 
 	if p.LookPath != nil && p.RunFZF != nil {
@@ -42,7 +42,7 @@ func (p *Picker) Select(names []string) (string, error) {
 		}
 	}
 
-	_, _ = fmt.Fprintln(p.Output, "Select workspace:")
+	_, _ = fmt.Fprintln(p.Output, "Select worktree:")
 	for i, name := range names {
 		_, _ = fmt.Fprintf(p.Output, "  %d) %s\n", i+1, name)
 	}
@@ -64,7 +64,7 @@ func (p *Picker) Select(names []string) (string, error) {
 }
 
 func runFZF(path string, names []string, stderr io.Writer) (string, error) {
-	cmd := exec.Command(path, "--prompt", "workspace> ")
+	cmd := exec.Command(path, "--prompt", "worktree> ")
 	cmd.Stdin = strings.NewReader(strings.Join(names, "\n") + "\n")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout

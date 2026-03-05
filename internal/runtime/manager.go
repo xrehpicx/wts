@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xrehpicx/wts/internal/model"
+	"github.com/xrehpicx/wts/internal/state"
 	"github.com/xrehpicx/wts/internal/tmux"
 )
 
@@ -25,6 +26,7 @@ type Backend interface {
 
 type Manager struct {
 	project *model.Project
+	repo    *state.RepoState
 	backend Backend
 	session string
 }
@@ -34,18 +36,20 @@ type SwitchOptions struct {
 }
 
 type StatusRow struct {
-	Workspace string `json:"workspace"`
-	Group     string `json:"group"`
-	Running   bool   `json:"running"`
-	Active    bool   `json:"active"`
-	Dir       string `json:"dir"`
+	Worktree string `json:"worktree"`
+	Process  string `json:"process"`
+	Group    string `json:"group"`
+	Running  bool   `json:"running"`
+	Active   bool   `json:"active"`
+	Dir      string `json:"dir"`
 }
 
-func NewManager(project *model.Project, backend Backend) *Manager {
+func NewManager(project *model.Project, repo *state.RepoState, backend Backend) *Manager {
 	return &Manager{
 		project: project,
+		repo:    repo,
 		backend: backend,
-		session: tmux.SessionName(project.RootDir),
+		session: tmux.SessionName(repo.Root),
 	}
 }
 
@@ -53,29 +57,29 @@ func (m *Manager) Session() string {
 	return m.session
 }
 
-func (m *Manager) ListWorkspaces() []model.Workspace {
-	workspaces := make([]model.Workspace, len(m.project.Workspaces))
-	copy(workspaces, m.project.Workspaces)
-	sort.Slice(workspaces, func(i, j int) bool {
-		return workspaces[i].Name < workspaces[j].Name
+func (m *Manager) ListWorktrees() []state.Worktree {
+	items := make([]state.Worktree, len(m.repo.Worktrees))
+	copy(items, m.repo.Worktrees)
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Name < items[j].Name
 	})
-	return workspaces
+	return items
 }
 
-func (m *Manager) Switch(ctx context.Context, workspace string, opts SwitchOptions) error {
-	return m.activate(ctx, workspace, opts, false)
+func (m *Manager) Switch(ctx context.Context, worktree string, opts SwitchOptions) error {
+	return m.activate(ctx, worktree, opts, false)
 }
 
-func (m *Manager) Start(ctx context.Context, workspace string, opts SwitchOptions) error {
-	return m.activate(ctx, workspace, opts, false)
+func (m *Manager) Start(ctx context.Context, worktree string, opts SwitchOptions) error {
+	return m.activate(ctx, worktree, opts, false)
 }
 
-func (m *Manager) Restart(ctx context.Context, workspace string, opts SwitchOptions) error {
-	return m.activate(ctx, workspace, opts, true)
+func (m *Manager) Restart(ctx context.Context, worktree string, opts SwitchOptions) error {
+	return m.activate(ctx, worktree, opts, true)
 }
 
-func (m *Manager) activate(ctx context.Context, workspace string, opts SwitchOptions, forceRestart bool) error {
-	ws, err := m.project.Workspace(workspace)
+func (m *Manager) activate(ctx context.Context, worktree string, opts SwitchOptions, forceRestart bool) error {
+	wt, proc, group, err := m.resolveWorktree(worktree)
 	if err != nil {
 		return err
 	}
@@ -83,45 +87,44 @@ func (m *Manager) activate(ctx context.Context, workspace string, opts SwitchOpt
 		return err
 	}
 
-	activeKey := tmux.GroupOptionKey(ws.EffectiveGroup)
-	activeWorkspace, err := m.backend.GetSessionOption(ctx, m.session, activeKey)
+	activeKey := tmux.GroupOptionKey(group)
+	activeWorktree, err := m.backend.GetSessionOption(ctx, m.session, activeKey)
 	if err != nil {
 		return err
 	}
-
-	if activeWorkspace != "" && activeWorkspace != ws.Name {
-		if prev, err := m.project.Workspace(activeWorkspace); err == nil {
-			if err := m.stopWorkspaceProcess(ctx, prev); err != nil {
-				return fmt.Errorf("stop previous workspace %q: %w", prev.Name, err)
+	if activeWorktree != "" && activeWorktree != wt.Name {
+		if prev, _, _, prevErr := m.resolveWorktree(activeWorktree); prevErr == nil {
+			if err := m.stopWorktreeProcess(ctx, prev); err != nil {
+				return fmt.Errorf("stop previous worktree %q: %w", prev.Name, err)
 			}
 		}
 	}
 
 	if forceRestart {
-		if err := m.stopWorkspaceProcess(ctx, ws); err != nil {
-			return fmt.Errorf("restart workspace %q: %w", ws.Name, err)
+		if err := m.stopWorktreeProcess(ctx, wt); err != nil {
+			return fmt.Errorf("restart worktree %q: %w", wt.Name, err)
 		}
 	}
 
-	running, err := m.isRunning(ctx, ws)
+	running, err := m.isRunning(ctx, wt)
 	if err != nil {
 		return err
 	}
 	if !running {
-		if err := m.startWorkspaceProcess(ctx, ws); err != nil {
+		if err := m.startWorktreeProcess(ctx, wt, proc); err != nil {
 			return err
 		}
 	}
 
-	if err := m.backend.SetSessionOption(ctx, m.session, activeKey, ws.Name); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, activeKey, wt.Name); err != nil {
 		return err
 	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), ws.Name); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), wt.Name); err != nil {
 		return err
 	}
 
 	if opts.Attach {
-		if err := m.backend.Attach(ctx, m.session, tmux.WindowName(ws.Name)); err != nil {
+		if err := m.backend.Attach(ctx, m.session, tmux.WindowName(wt.Name)); err != nil {
 			return err
 		}
 	}
@@ -129,25 +132,24 @@ func (m *Manager) activate(ctx context.Context, workspace string, opts SwitchOpt
 	return nil
 }
 
-func (m *Manager) StopWorkspace(ctx context.Context, workspace string) error {
-	ws, err := m.project.Workspace(workspace)
+func (m *Manager) StopWorktree(ctx context.Context, worktree string) error {
+	wt, _, group, err := m.resolveWorktree(worktree)
 	if err != nil {
 		return err
 	}
 	if err := m.ensureReady(ctx); err != nil {
 		return err
 	}
-
-	if err := m.stopWorkspaceProcess(ctx, ws); err != nil {
+	if err := m.stopWorktreeProcess(ctx, wt); err != nil {
 		return err
 	}
 
-	activeKey := tmux.GroupOptionKey(ws.EffectiveGroup)
+	activeKey := tmux.GroupOptionKey(group)
 	active, err := m.backend.GetSessionOption(ctx, m.session, activeKey)
 	if err != nil {
 		return err
 	}
-	if active == ws.Name {
+	if active == wt.Name {
 		if err := m.backend.SetSessionOption(ctx, m.session, activeKey, ""); err != nil {
 			return err
 		}
@@ -157,7 +159,7 @@ func (m *Manager) StopWorkspace(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
-	if last == ws.Name {
+	if last == wt.Name {
 		if err := m.backend.SetSessionOption(ctx, m.session, tmux.LastSelectedOptionKey(), ""); err != nil {
 			return err
 		}
@@ -178,27 +180,32 @@ func (m *Manager) StopGroup(ctx context.Context, group string) error {
 	if active == "" {
 		return nil
 	}
-	if !m.project.IsKnownWorkspace(active) {
+	if _, idx := m.repo.Worktree(active); idx < 0 {
 		_ = m.backend.SetSessionOption(ctx, m.session, key, "")
 		return nil
 	}
-	if err := m.StopWorkspace(ctx, active); err != nil {
-		return err
-	}
-	return nil
+	return m.StopWorktree(ctx, active)
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
 	if err := m.ensureReady(ctx); err != nil {
 		return err
 	}
-	for i := range m.project.Workspaces {
-		if err := m.stopWorkspaceProcess(ctx, &m.project.Workspaces[i]); err != nil {
+	for i := range m.repo.Worktrees {
+		if err := m.stopWorktreeProcess(ctx, &m.repo.Worktrees[i]); err != nil {
 			return err
 		}
 	}
-	for _, group := range m.project.Groups() {
-		if err := m.backend.SetSessionOption(ctx, m.session, tmux.GroupOptionKey(group), ""); err != nil {
+	groups := map[string]struct{}{}
+	for i := range m.repo.Worktrees {
+		_, proc, group, err := m.resolveWorktree(m.repo.Worktrees[i].Name)
+		if err != nil || proc == nil {
+			continue
+		}
+		groups[group] = struct{}{}
+	}
+	for g := range groups {
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.GroupOptionKey(g), ""); err != nil {
 			return err
 		}
 	}
@@ -208,70 +215,72 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) Logs(ctx context.Context, workspace string, lines int) (string, error) {
-	ws, err := m.project.Workspace(workspace)
+func (m *Manager) Logs(ctx context.Context, worktree string, lines int) (string, error) {
+	wt, _, _, err := m.resolveWorktree(worktree)
 	if err != nil {
 		return "", err
 	}
 	if err := m.ensureReady(ctx); err != nil {
 		return "", err
 	}
-
-	running, err := m.isRunning(ctx, ws)
+	running, err := m.isRunning(ctx, wt)
 	if err != nil {
 		return "", err
 	}
 	if !running {
-		return "", fmt.Errorf("workspace %q is not running", workspace)
+		return "", fmt.Errorf("worktree %q is not running", worktree)
 	}
-
-	return m.backend.CapturePane(ctx, m.session, tmux.WindowName(ws.Name), lines)
+	return m.backend.CapturePane(ctx, m.session, tmux.WindowName(wt.Name), lines)
 }
 
-func (m *Manager) Status(ctx context.Context, workspace string) ([]StatusRow, error) {
+func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, error) {
 	if err := m.ensureReady(ctx); err != nil {
 		return nil, err
 	}
 
-	rows := make([]StatusRow, 0, len(m.project.Workspaces))
-	for i := range m.project.Workspaces {
-		ws := &m.project.Workspaces[i]
-		if workspace != "" && workspace != ws.Name {
+	rows := make([]StatusRow, 0, len(m.repo.Worktrees))
+	for i := range m.repo.Worktrees {
+		wt := &m.repo.Worktrees[i]
+		if worktree != "" && wt.Name != worktree {
 			continue
 		}
-		running, err := m.isRunning(ctx, ws)
+		proc, err := m.project.Process(wt.Process)
 		if err != nil {
 			return nil, err
 		}
-		active, err := m.isActive(ctx, ws)
+		group := model.EffectiveGroup(proc, wt.Group, wt.Name)
+		running, err := m.isRunning(ctx, wt)
+		if err != nil {
+			return nil, err
+		}
+		active, err := m.isActive(ctx, wt, group)
 		if err != nil {
 			return nil, err
 		}
 		rows = append(rows, StatusRow{
-			Workspace: ws.Name,
-			Group:     ws.EffectiveGroup,
-			Running:   running,
-			Active:    active,
-			Dir:       ws.ResolvedDir,
+			Worktree: wt.Name,
+			Process:  wt.Process,
+			Group:    group,
+			Running:  running,
+			Active:   active,
+			Dir:      wt.Dir,
 		})
 	}
 
-	if workspace != "" && len(rows) == 0 {
-		return nil, fmt.Errorf("workspace %q not found", workspace)
+	if worktree != "" && len(rows) == 0 {
+		return nil, fmt.Errorf("worktree %q not found", worktree)
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Workspace < rows[j].Workspace
-	})
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Worktree < rows[j].Worktree })
 	return rows, nil
 }
 
-func (m *Manager) StatusJSON(ctx context.Context, workspace string) ([]byte, error) {
-	rows, err := m.Status(ctx, workspace)
+func (m *Manager) StatusJSON(ctx context.Context, worktree string) ([]byte, error) {
+	rows, err := m.Status(ctx, worktree)
 	if err != nil {
 		return nil, err
 	}
-	if workspace != "" {
+	if worktree != "" {
 		return json.MarshalIndent(rows[0], "", "  ")
 	}
 	return json.MarshalIndent(rows, "", "  ")
@@ -287,40 +296,51 @@ func (m *Manager) ensureReady(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) startWorkspaceProcess(ctx context.Context, ws *model.Workspace) error {
-	window := tmux.WindowName(ws.Name)
+func (m *Manager) resolveWorktree(name string) (*state.Worktree, *model.Process, string, error) {
+	wt, _ := m.repo.Worktree(name)
+	if wt == nil {
+		return nil, nil, "", fmt.Errorf("worktree %q not found", name)
+	}
+	proc, err := m.project.Process(wt.Process)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	group := model.EffectiveGroup(proc, wt.Group, wt.Name)
+	return wt, proc, group, nil
+}
+
+func (m *Manager) startWorktreeProcess(ctx context.Context, wt *state.Worktree, proc *model.Process) error {
+	window := tmux.WindowName(wt.Name)
 	if err := m.backend.StartWindowCommand(
 		ctx,
 		m.session,
 		window,
-		ws.ResolvedDir,
+		wt.Dir,
 		m.project.Defaults.Shell,
-		ws.Command,
-		ws.Env,
+		proc.Command,
+		proc.Env,
 	); err != nil {
-		return fmt.Errorf("start workspace %q: %w", ws.Name, err)
+		return fmt.Errorf("start worktree %q: %w", wt.Name, err)
 	}
 	return nil
 }
 
-func (m *Manager) stopWorkspaceProcess(ctx context.Context, ws *model.Workspace) error {
-	window := tmux.WindowName(ws.Name)
+func (m *Manager) stopWorktreeProcess(ctx context.Context, wt *state.Worktree) error {
 	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-	if err := m.backend.StopWindow(ctx, m.session, window, timeout); err != nil {
-		return fmt.Errorf("stop workspace %q: %w", ws.Name, err)
+	if err := m.backend.StopWindow(ctx, m.session, tmux.WindowName(wt.Name), timeout); err != nil {
+		return fmt.Errorf("stop worktree %q: %w", wt.Name, err)
 	}
 	return nil
 }
 
-func (m *Manager) isRunning(ctx context.Context, ws *model.Workspace) (bool, error) {
-	window := tmux.WindowName(ws.Name)
-	return m.backend.HasWindow(ctx, m.session, window)
+func (m *Manager) isRunning(ctx context.Context, wt *state.Worktree) (bool, error) {
+	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Name))
 }
 
-func (m *Manager) isActive(ctx context.Context, ws *model.Workspace) (bool, error) {
-	active, err := m.backend.GetSessionOption(ctx, m.session, tmux.GroupOptionKey(ws.EffectiveGroup))
+func (m *Manager) isActive(ctx context.Context, wt *state.Worktree, group string) (bool, error) {
+	active, err := m.backend.GetSessionOption(ctx, m.session, tmux.GroupOptionKey(group))
 	if err != nil {
 		return false, err
 	}
-	return active == ws.Name, nil
+	return active == wt.Name, nil
 }

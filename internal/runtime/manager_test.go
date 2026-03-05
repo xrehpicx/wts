@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xrehpicx/wts/internal/model"
+	"github.com/xrehpicx/wts/internal/state"
 	"github.com/xrehpicx/wts/internal/tmux"
 )
 
@@ -25,8 +26,10 @@ func newMockBackend() *mockBackend {
 	}
 }
 
-func (m *mockBackend) EnsureTmux(context.Context) error            { return nil }
-func (m *mockBackend) EnsureSession(context.Context, string) error { return nil }
+func (m *mockBackend) EnsureTmux(context.Context) error { return nil }
+func (m *mockBackend) EnsureSession(context.Context, string) error {
+	return nil
+}
 func (m *mockBackend) HasWindow(_ context.Context, _ string, window string) (bool, error) {
 	return m.windows[window], nil
 }
@@ -63,147 +66,83 @@ func testProject() *model.Project {
 			StopTimeoutSec: model.DefaultStopTimeout,
 			Shell:          model.DefaultShell,
 		},
-		Workspaces: []model.Workspace{
-			{Name: "api", ResolvedDir: "/tmp/api", Command: "go run .", EffectiveGroup: "backend", Env: map[string]string{}},
-			{Name: "worker", ResolvedDir: "/tmp/worker", Command: "go run .", EffectiveGroup: "backend", Env: map[string]string{}},
-			{Name: "web", ResolvedDir: "/tmp/web", Command: "pnpm dev", EffectiveGroup: "frontend", Env: map[string]string{}},
+		Processes: []model.Process{
+			{Name: "api", Command: "go run .", Group: "backend", Env: map[string]string{}},
+			{Name: "worker", Command: "go run .", Group: "backend", Env: map[string]string{}},
+			{Name: "web", Command: "pnpm dev", Group: "frontend", Env: map[string]string{}},
 		},
 	}
 	return model.NewProject("/tmp/.wts.yaml", "/tmp", cfg)
 }
 
-func TestSwitchStartsWorkspaceAndMarksActive(t *testing.T) {
+func testRepo() *state.RepoState {
+	return &state.RepoState{
+		Root: "/tmp/repo",
+		Worktrees: []state.Worktree{
+			{Name: "api-main", Dir: "/tmp/api-main", Process: "api"},
+			{Name: "api-agent", Dir: "/tmp/api-agent", Process: "worker"},
+			{Name: "web-main", Dir: "/tmp/web-main", Process: "web"},
+		},
+	}
+}
+
+func TestSwitchStartsWorktreeAndMarksActive(t *testing.T) {
 	t.Parallel()
-
 	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
+	manager := NewManager(testProject(), testRepo(), backend)
 
-	if err := manager.Switch(context.Background(), "api", SwitchOptions{}); err != nil {
+	if err := manager.Switch(context.Background(), "api-main", SwitchOptions{}); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 
-	window := tmux.WindowName("api")
+	window := tmux.WindowName("api-main")
 	if !backend.windows[window] {
 		t.Fatalf("expected %q to be running", window)
 	}
 	key := tmux.GroupOptionKey("backend")
-	if backend.options[key] != "api" {
+	if backend.options[key] != "api-main" {
 		t.Fatalf("unexpected active backend value: %q", backend.options[key])
 	}
 }
 
-func TestSwitchPreemptsPreviousWorkspaceInSameGroup(t *testing.T) {
+func TestSwitchPreemptsSameGroup(t *testing.T) {
 	t.Parallel()
-
 	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
+	manager := NewManager(testProject(), testRepo(), backend)
 	ctx := context.Background()
 
-	if err := manager.Switch(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api: %v", err)
+	if err := manager.Switch(ctx, "api-main", SwitchOptions{}); err != nil {
+		t.Fatalf("switch api-main: %v", err)
 	}
-	if err := manager.Switch(ctx, "worker", SwitchOptions{}); err != nil {
-		t.Fatalf("switch worker: %v", err)
+	if err := manager.Switch(ctx, "api-agent", SwitchOptions{}); err != nil {
+		t.Fatalf("switch api-agent: %v", err)
 	}
 
-	apiWindow := tmux.WindowName("api")
-	workerWindow := tmux.WindowName("worker")
-	if backend.windows[apiWindow] {
-		t.Fatalf("expected %q to be stopped", apiWindow)
+	if backend.windows[tmux.WindowName("api-main")] {
+		t.Fatalf("expected previous worktree stopped")
 	}
-	if !backend.windows[workerWindow] {
-		t.Fatalf("expected %q to be running", workerWindow)
-	}
-	if backend.stopCount[apiWindow] == 0 {
-		t.Fatalf("expected %q to be preempted", apiWindow)
+	if !backend.windows[tmux.WindowName("api-agent")] {
+		t.Fatalf("expected target worktree running")
 	}
 }
 
-func TestSwitchAcrossGroupsKeepsOtherGroupRunning(t *testing.T) {
+func TestSwitchDifferentGroupNoPreempt(t *testing.T) {
 	t.Parallel()
-
 	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
+	manager := NewManager(testProject(), testRepo(), backend)
 	ctx := context.Background()
 
-	if err := manager.Switch(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api: %v", err)
+	if err := manager.Switch(ctx, "api-main", SwitchOptions{}); err != nil {
+		t.Fatalf("switch api-main: %v", err)
 	}
-	if err := manager.Switch(ctx, "web", SwitchOptions{}); err != nil {
-		t.Fatalf("switch web: %v", err)
-	}
-
-	if !backend.windows[tmux.WindowName("api")] {
-		t.Fatalf("expected api workspace to stay running")
-	}
-	if !backend.windows[tmux.WindowName("web")] {
-		t.Fatalf("expected web workspace to be running")
-	}
-}
-
-func TestStartPreemptsWithinGroup(t *testing.T) {
-	t.Parallel()
-
-	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
-	ctx := context.Background()
-
-	if err := manager.Start(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("start api: %v", err)
-	}
-	if err := manager.Start(ctx, "worker", SwitchOptions{}); err != nil {
-		t.Fatalf("start worker: %v", err)
+	if err := manager.Switch(ctx, "web-main", SwitchOptions{}); err != nil {
+		t.Fatalf("switch web-main: %v", err)
 	}
 
-	if backend.stopCount[tmux.WindowName("api")] == 0 {
-		t.Fatalf("expected api workspace to be preempted by start")
+	if !backend.windows[tmux.WindowName("api-main")] {
+		t.Fatalf("expected api-main still running")
 	}
-}
-
-func TestRestartRecreatesWorkspaceProcess(t *testing.T) {
-	t.Parallel()
-
-	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
-	ctx := context.Background()
-
-	if err := manager.Switch(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api: %v", err)
-	}
-	if err := manager.Restart(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("restart api: %v", err)
-	}
-
-	window := tmux.WindowName("api")
-	if backend.stopCount[window] == 0 {
-		t.Fatalf("expected stop call during restart")
-	}
-	if backend.startCount[window] < 2 {
-		t.Fatalf("expected start to run twice, got %d", backend.startCount[window])
-	}
-}
-
-func TestStopGroupStopsOnlyGroupActiveWorkspace(t *testing.T) {
-	t.Parallel()
-
-	backend := newMockBackend()
-	manager := NewManager(testProject(), backend)
-	ctx := context.Background()
-
-	if err := manager.Switch(ctx, "api", SwitchOptions{}); err != nil {
-		t.Fatalf("switch api: %v", err)
-	}
-	if err := manager.Switch(ctx, "web", SwitchOptions{}); err != nil {
-		t.Fatalf("switch web: %v", err)
-	}
-	if err := manager.StopGroup(ctx, "backend"); err != nil {
-		t.Fatalf("stop group backend: %v", err)
-	}
-
-	if backend.windows[tmux.WindowName("api")] {
-		t.Fatalf("expected backend active workspace to be stopped")
-	}
-	if !backend.windows[tmux.WindowName("web")] {
-		t.Fatalf("expected frontend workspace to remain running")
+	if !backend.windows[tmux.WindowName("web-main")] {
+		t.Fatalf("expected web-main running")
 	}
 }

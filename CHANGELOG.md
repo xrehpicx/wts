@@ -10,8 +10,10 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 - New `workswitch` CLI (`wts`, short for worktree switch) with commands: `list`, `switch`, `start`, `restart`,
   `stop`, `status`, `logs`, `pick`, `validate`, and `version`
-- Repo-local config loader for `.wts.yaml` (with legacy compatibility) and validation/defaults
-- Runtime manager enforcing one active workspace process per group
+- Bubble Tea powered `wts tui` with worktree navigation and management shortcuts
+- New persistent state store at `~/.workswitch/state.yaml` for per-repo worktree assignments
+- Repo-local process-only config loader for `.wts.yaml` with validation/defaults
+- Runtime manager enforcing one active worktree process per group
 - Interactive picker with `fzf` support and built-in fallback prompt
 - Unit/integration-style tests for config normalization, tmux naming, picker fallback,
   and group preemption behavior

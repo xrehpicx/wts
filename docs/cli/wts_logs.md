@@ -1,38 +1,26 @@
 ## wts logs
 
-Show recent tmux pane output for a workspace
-
-### Synopsis
-
-Capture output from the workspace's tmux pane history.
-
-Use --lines to choose how many historical lines to print.
+Show recent tmux pane output for a worktree
 
 ```
-wts logs <workspace> [flags]
-```
-
-### Examples
-
-```
-  wts logs api-main
-  wts logs api-main --lines 500
+wts logs <worktree> [flags]
 ```
 
 ### Options
 
 ```
   -h, --help        help for logs
-      --lines int   number of log lines to capture (default 200)
+      --lines int   number of log lines (default 200)
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+      --config string   path to .wts.yaml
+      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for grouped dev processes via tmux
+* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
 

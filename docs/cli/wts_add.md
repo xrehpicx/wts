@@ -1,15 +1,18 @@
-## wts validate
+## wts add
 
-Validate .wts.yaml
+Add a worktree directory assignment
 
 ```
-wts validate [flags]
+wts add <dir> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+      --group string     optional group override
+  -h, --help             help for add
+      --name string      worktree alias name
+      --process string   process profile name
 ```
 
 ### Options inherited from parent commands

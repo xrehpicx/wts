@@ -1,15 +1,16 @@
-## wts validate
+## wts assign
 
-Validate .wts.yaml
+Assign a process profile to a worktree
 
 ```
-wts validate [flags]
+wts assign <worktree> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help             help for assign
+      --process string   process profile name
 ```
 
 ### Options inherited from parent commands

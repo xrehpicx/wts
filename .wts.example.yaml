@@ -2,20 +2,13 @@ version: 1
 defaults:
   stop_timeout_sec: 8
   shell: /bin/sh
-workspaces:
+processes:
   - name: api
-    dir: ./services/api
     command: "go run ./cmd/api"
     group: backend
-  - name: demo-script
-    dir: .
-    command: "./scripts/example-longrun.sh demo-script 3"
-    group: demo
-  - name: worker
-    dir: ./services/worker
-    command: "go run ./cmd/worker"
-    group: backend
   - name: web
-    dir: ./apps/web
     command: "pnpm dev"
     group: frontend
+  - name: demo-script
+    command: "./scripts/example-longrun.sh demo-script 3"
+    group: demo

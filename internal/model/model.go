@@ -13,9 +13,9 @@ const (
 )
 
 type Config struct {
-	Version    int         `yaml:"version"`
-	Defaults   Defaults    `yaml:"defaults"`
-	Workspaces []Workspace `yaml:"workspaces"`
+	Version   int       `yaml:"version"`
+	Defaults  Defaults  `yaml:"defaults"`
+	Processes []Process `yaml:"processes"`
 }
 
 type Defaults struct {
@@ -23,70 +23,59 @@ type Defaults struct {
 	Shell          string `yaml:"shell"`
 }
 
-type Workspace struct {
-	Name           string            `yaml:"name"`
-	Dir            string            `yaml:"dir"`
-	Command        string            `yaml:"command"`
-	Group          string            `yaml:"group,omitempty"`
-	Env            map[string]string `yaml:"env,omitempty"`
-	ResolvedDir    string            `yaml:"-"`
-	EffectiveGroup string            `yaml:"-"`
+type Process struct {
+	Name    string            `yaml:"name"`
+	Command string            `yaml:"command"`
+	Group   string            `yaml:"group,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 type Project struct {
 	ConfigPath string
 	RootDir    string
 	Defaults   Defaults
-	Workspaces []Workspace
+	Processes  []Process
 
-	indexByName map[string]int
+	procByName map[string]int
 }
 
 func NewProject(configPath, rootDir string, cfg Config) *Project {
 	p := &Project{
-		ConfigPath:  configPath,
-		RootDir:     rootDir,
-		Defaults:    cfg.Defaults,
-		Workspaces:  cfg.Workspaces,
-		indexByName: make(map[string]int, len(cfg.Workspaces)),
+		ConfigPath: configPath,
+		RootDir:    rootDir,
+		Defaults:   cfg.Defaults,
+		Processes:  cfg.Processes,
+		procByName: make(map[string]int, len(cfg.Processes)),
 	}
-	for i := range p.Workspaces {
-		p.indexByName[p.Workspaces[i].Name] = i
+	for i := range p.Processes {
+		p.procByName[p.Processes[i].Name] = i
 	}
 	return p
 }
 
-func (p *Project) Workspace(name string) (*Workspace, error) {
-	idx, ok := p.indexByName[name]
+func (p *Project) Process(name string) (*Process, error) {
+	idx, ok := p.procByName[name]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q not found", name)
+		return nil, fmt.Errorf("process %q not found", name)
 	}
-	return &p.Workspaces[idx], nil
+	return &p.Processes[idx], nil
 }
 
-func (p *Project) WorkspaceNames() []string {
-	names := make([]string, 0, len(p.Workspaces))
-	for _, ws := range p.Workspaces {
-		names = append(names, ws.Name)
+func (p *Project) ProcessNames() []string {
+	names := make([]string, 0, len(p.Processes))
+	for _, proc := range p.Processes {
+		names = append(names, proc.Name)
 	}
 	sort.Strings(names)
 	return names
 }
 
-func (p *Project) Groups() []string {
-	seen := make(map[string]struct{})
-	for _, ws := range p.Workspaces {
-		seen[ws.EffectiveGroup] = struct{}{}
+func EffectiveGroup(process *Process, override string, fallbackName string) string {
+	if override != "" {
+		return override
 	}
-	groups := make([]string, 0, len(seen))
-	for group := range seen {
-		groups = append(groups, group)
+	if process != nil && process.Group != "" {
+		return process.Group
 	}
-	sort.Strings(groups)
-	return groups
-}
-
-func (p *Project) IsKnownWorkspace(name string) bool {
-	_, ok := p.indexByName[name]
-	return ok
+	return ImplicitGroupPrefix + fallbackName
 }

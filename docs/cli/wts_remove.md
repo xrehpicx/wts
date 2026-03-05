@@ -1,15 +1,15 @@
-## wts validate
+## wts remove
 
-Validate .wts.yaml
+Remove a worktree assignment
 
 ```
-wts validate [flags]
+wts remove <worktree> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help   help for remove
 ```
 
 ### Options inherited from parent commands

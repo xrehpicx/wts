@@ -2,20 +2,28 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-list - List configured worktrees for this repo
+wts-group - Set or clear group override for a worktree
 
 
 .SH SYNOPSIS
-\fBwts list [flags]\fP
+\fBwts group  [flags]\fP
 
 
 .SH DESCRIPTION
-List configured worktrees for this repo
+Set or clear group override for a worktree
 
 
 .SH OPTIONS
+\fB--clear\fP[=false]
+	clear group override
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
-	help for list
+	help for group
+
+.PP
+\fB--set\fP=""
+	set group override
 
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS

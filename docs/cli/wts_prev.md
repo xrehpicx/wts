@@ -1,15 +1,15 @@
-## wts validate
+## wts prev
 
-Validate .wts.yaml
+Switch to previous worktree in list
 
 ```
-wts validate [flags]
+wts prev [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help   help for prev
 ```
 
 ### Options inherited from parent commands

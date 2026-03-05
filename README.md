@@ -1,17 +1,17 @@
 # workswitch
 
-`workswitch` is a tmux-backed process switcher for development workspaces.
-The command is `wts`, which stands for **worktree switch**.
+`workswitch` is a tmux-backed process switcher for multi-worktree development.
 
-It is designed for teams using AI agents + Git worktrees, where each worktree has the same app stack but only one process should be active within a group at a time.
+Binary: `wts` (short for **worktree switch**).
 
-## Why this exists
+## Model
 
-When AI agents work in parallel Git worktrees, developers often need to move a shared dev server between worktree directories quickly. `workswitch` lets you model that directly:
+`workswitch` now uses a strict split:
 
-- define multiple workspaces (worktree directories)
-- tie them with a group (for example `backend`)
-- switching within that group preempts the previous workspace process
+1. `.wts.yaml` (repo local): process profiles only
+2. `~/.workswitch/state.yaml` (user global): per-repo worktree directories and assignments
+
+This is optimized for AI-agent workflows where multiple git worktrees exist and you want to move long-running dev processes between those directories quickly.
 
 ## Requirements
 
@@ -25,95 +25,103 @@ When AI agents work in parallel Git worktrees, developers often need to move a s
 go install github.com/xrehpicx/wts@latest
 ```
 
-## Configuration
-
-Default config file: `.wts.yaml`
-
-Also supported for compatibility:
-
-- `.worktreeswitch.yaml`
-- `.workswitch.yaml`
-
-Example config:
+## Process config (`.wts.yaml`)
 
 ```yaml
 version: 1
 defaults:
   stop_timeout_sec: 8
   shell: /bin/sh
-workspaces:
-  - name: wt-main
-    dir: ../repo-main
-    command: "pnpm dev"
-    group: web
-  - name: wt-agent-a
-    dir: ../repo-agent-a
-    command: "pnpm dev"
-    group: web
-  - name: api-main
-    dir: ../repo-main
+processes:
+  - name: api
     command: "go run ./cmd/api"
     group: backend
-  - name: api-agent-b
-    dir: ../repo-agent-b
-    command: "go run ./cmd/api"
-    group: backend
+  - name: web
+    command: "pnpm dev"
+    group: frontend
+  - name: demo-script
+    command: "./scripts/example-longrun.sh demo-script 3"
+    group: demo
 ```
 
-Repo demo process script:
+Notes:
 
-- `scripts/example-longrun.sh` is a sample long-running command you can assign to any workspace.
-- included in `.wts.example.yaml` as workspace `demo-script`.
+- no worktree directories are stored in `.wts.yaml`
+- directory assignments are managed with CLI/TUI and saved in `~/.workswitch/state.yaml`
 
-## Quickstart
+## Long-running example script
+
+- [scripts/example-longrun.sh](scripts/example-longrun.sh) is included as a reusable demo process.
+- It is referenced in [.wts.example.yaml](.wts.example.yaml) as `demo-script`.
+
+## Worktree management
+
+Add worktrees for current repo:
 
 ```bash
-make airflow
-./bin/wts validate
-./bin/wts list
-./bin/wts switch api-main
-./bin/wts switch api-agent-b   # stops api-main (same group)
-./bin/wts switch wt-main       # independent if in different group
-./bin/wts status
-./bin/wts stop --all
+wts add ../repo-main --name main --process api
+wts add ../repo-agent-a --name agent-a --process api
+wts add ../repo-web --name web-main --process web
 ```
 
-## Help and command docs
+View assignments:
 
-CLI help (Cobra-powered):
+```bash
+wts list
+wts processes
+```
+
+Adjust assignment/group:
+
+```bash
+wts assign agent-a --process web
+wts group agent-a --set backend
+wts group agent-a --clear
+wts remove web-main
+```
+
+## Runtime commands
+
+```bash
+wts switch main
+wts next
+wts prev
+wts restart agent-a
+wts status
+wts logs main --lines 200
+wts stop --group backend
+wts stop --all
+```
+
+## TUI (Bubble Tea)
+
+Launch interactive UI:
+
+```bash
+wts tui
+```
+
+TUI shortcuts:
+
+- `n` / `p` (or arrows): move next/prev worktree
+- `s` / `enter`: switch to selected worktree
+- `r`: restart selected
+- `x`: stop selected
+- `a`: add current repo root as a worktree entry
+- `d`: remove selected worktree entry
+- `[` / `]`: cycle process profile on selected worktree
+- `g`: set selected worktree group override to process group
+- `u`: clear group override
+- `q`: quit
+
+## Help and docs
 
 ```bash
 wts --help
 wts switch --help
-wts stop --help
-```
-
-Generate and browse full command docs:
-
-```bash
 make docs
-ls docs/cli
-```
-
-Man pages are generated into `docs/man`:
-
-```bash
 man ./docs/man/wts.1
-man ./docs/man/wts-switch.1
 ```
-
-## Core commands
-
-- `wts list`
-- `wts switch <workspace> [--attach]`
-- `wts start <workspace> [--attach]`
-- `wts restart <workspace> [--attach]`
-- `wts stop <workspace|--group <name>|--all>`
-- `wts status [workspace] [--json]`
-- `wts logs <workspace> [--lines 200]`
-- `wts pick [--attach]`
-- `wts validate`
-- `wts version`
 
 ## Make targets
 
@@ -127,13 +135,6 @@ Primary flow:
 2. `make check` runs `tidy`, `fmt`, `vet`, `lint`, `test`
 3. `make coverage` writes `coverage.out`
 4. `make install` installs `wts` to `GOPATH/bin`
-
-## Runtime model
-
-- One tmux session per repo.
-- One tmux window per workspace (`ws:<workspace>`).
-- Group activity is tracked in tmux session options.
-- Tmux is the source of runtime truth (no separate state DB).
 
 ## Project docs
 

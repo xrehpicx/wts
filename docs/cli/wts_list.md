@@ -1,22 +1,9 @@
 ## wts list
 
-List configured workspaces
-
-### Synopsis
-
-List all configured workspaces from the resolved config file.
-
-Shows workspace name, effective group, absolute directory, and configured command.
+List configured worktrees for this repo
 
 ```
 wts list [flags]
-```
-
-### Examples
-
-```
-  wts list
-  wts --config ./my-config.yaml list
 ```
 
 ### Options
@@ -28,10 +15,11 @@ wts list [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+      --config string   path to .wts.yaml
+      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for grouped dev processes via tmux
+* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
 

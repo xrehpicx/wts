@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-start - Start workspace process and make it active for its group
+wts-start - Start process for a worktree
 
 
 .SH SYNOPSIS
@@ -10,16 +10,12 @@ wts-start - Start workspace process and make it active for its group
 
 
 .SH DESCRIPTION
-Start a workspace process using the configured command in its directory.
-
-.PP
-Like switch, start preempts the currently active workspace in the same group.
-If target is already running, it is reused unless you run restart.
+Start process for a worktree
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
-	attach/focus tmux after starting
+	attach/focus tmux after command
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -28,14 +24,11 @@ If target is already running, it is reused unless you run restart.
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
-	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+	path to .wts.yaml
 
-
-.SH EXAMPLE
-.EX
-  wts start web-main
-  wts start web-agent-a --attach
-.EE
+.PP
+\fB--state\fP=""
+	path to state file (default ~/.workswitch/state.yaml)
 
 
 .SH SEE ALSO

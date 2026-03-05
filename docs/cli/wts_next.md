@@ -1,15 +1,15 @@
-## wts validate
+## wts next
 
-Validate .wts.yaml
+Switch to next worktree in list
 
 ```
-wts validate [flags]
+wts next [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help   help for next
 ```
 
 ### Options inherited from parent commands

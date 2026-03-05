@@ -2,20 +2,15 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-status - Show workspace runtime status
+wts-status - Show worktree runtime status
 
 
 .SH SYNOPSIS
-\fBwts status [workspace] [flags]\fP
+\fBwts status [worktree] [flags]\fP
 
 
 .SH DESCRIPTION
-Show current runtime status from tmux metadata and windows.
-
-.PP
-Fields:
-- running: tmux window for workspace exists
-- active: workspace matches active marker for its group
+Show worktree runtime status
 
 
 .SH OPTIONS
@@ -29,15 +24,11 @@ Fields:
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
-	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+	path to .wts.yaml
 
-
-.SH EXAMPLE
-.EX
-  wts status
-  wts status api-main
-  wts status --json
-.EE
+.PP
+\fB--state\fP=""
+	path to state file (default ~/.workswitch/state.yaml)
 
 
 .SH SEE ALSO

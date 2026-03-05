@@ -1,24 +1,9 @@
 ## wts pick
 
-Interactively pick and switch to a workspace
-
-### Synopsis
-
-Interactively choose a workspace and switch to it.
-
-Picker behavior:
-- uses fzf when available
-- falls back to built-in numbered prompt when fzf is missing
+Pick a worktree and switch
 
 ```
 wts pick [flags]
-```
-
-### Examples
-
-```
-  wts pick
-  wts pick --attach
 ```
 
 ### Options
@@ -31,10 +16,11 @@ wts pick [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+      --config string   path to .wts.yaml
+      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for grouped dev processes via tmux
+* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
 

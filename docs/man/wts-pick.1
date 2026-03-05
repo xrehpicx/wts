@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-pick - Interactively pick and switch to a workspace
+wts-pick - Pick a worktree and switch
 
 
 .SH SYNOPSIS
@@ -10,12 +10,7 @@ wts-pick - Interactively pick and switch to a workspace
 
 
 .SH DESCRIPTION
-Interactively choose a workspace and switch to it.
-
-.PP
-Picker behavior:
-- uses fzf when available
-- falls back to built-in numbered prompt when fzf is missing
+Pick a worktree and switch
 
 
 .SH OPTIONS
@@ -29,14 +24,11 @@ Picker behavior:
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
-	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+	path to .wts.yaml
 
-
-.SH EXAMPLE
-.EX
-  wts pick
-  wts pick --attach
-.EE
+.PP
+\fB--state\fP=""
+	path to state file (default ~/.workswitch/state.yaml)
 
 
 .SH SEE ALSO

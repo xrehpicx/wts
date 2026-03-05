@@ -1,15 +1,17 @@
-## wts validate
+## wts group
 
-Validate .wts.yaml
+Set or clear group override for a worktree
 
 ```
-wts validate [flags]
+wts group <worktree> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+      --clear        clear group override
+  -h, --help         help for group
+      --set string   set group override
 ```
 
 ### Options inherited from parent commands

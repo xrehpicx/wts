@@ -10,14 +10,7 @@ wts-validate - Validate .wts.yaml
 
 
 .SH DESCRIPTION
-Load and validate configuration file schema and workspace directories.
-
-.PP
-Checks include:
-- config version
-- workspace uniqueness
-- command presence
-- workspace directory existence
+Validate .wts.yaml
 
 
 .SH OPTIONS
@@ -27,14 +20,11 @@ Checks include:
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
-	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+	path to .wts.yaml
 
-
-.SH EXAMPLE
-.EX
-  wts validate
-  wts --config ./tmp/dev.wts.yaml validate
-.EE
+.PP
+\fB--state\fP=""
+	path to state file (default ~/.workswitch/state.yaml)
 
 
 .SH SEE ALSO

@@ -1,25 +1,9 @@
 ## wts status
 
-Show workspace runtime status
-
-### Synopsis
-
-Show current runtime status from tmux metadata and windows.
-
-Fields:
-- running: tmux window for workspace exists
-- active: workspace matches active marker for its group
+Show worktree runtime status
 
 ```
-wts status [workspace] [flags]
-```
-
-### Examples
-
-```
-  wts status
-  wts status api-main
-  wts status --json
+wts status [worktree] [flags]
 ```
 
 ### Options
@@ -32,10 +16,11 @@ wts status [workspace] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+      --config string   path to .wts.yaml
+      --state string    path to state file (default ~/.workswitch/state.yaml)
 ```
 
 ### SEE ALSO
 
-* [wts](wts.md)	 - workswitch (wts: worktree switch) for grouped dev processes via tmux
+* [wts](wts.md)	 - workswitch (wts: worktree switch) for moving processes across worktrees
 

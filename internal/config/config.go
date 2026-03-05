@@ -15,10 +15,8 @@ import (
 )
 
 const DefaultConfigFile = ".wts.yaml"
-const LegacyConfigFile = ".worktreeswitch.yaml"
-const DeprecatedConfigFile = ".workswitch.yaml"
 
-var workspaceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var processNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 func Load(configPath string) (*model.Project, error) {
 	if configPath == "" {
@@ -26,10 +24,7 @@ func Load(configPath string) (*model.Project, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve working directory: %w", err)
 		}
-		configPath, err = discoverConfigPath(cwd)
-		if err != nil {
-			return nil, err
-		}
+		configPath = filepath.Join(cwd, DefaultConfigFile)
 	}
 
 	absPath, err := filepath.Abs(configPath)
@@ -53,33 +48,14 @@ func Load(configPath string) (*model.Project, error) {
 	}
 
 	rootDir := filepath.Dir(absPath)
-	if err := normalizeAndValidate(&cfg, rootDir); err != nil {
+	if err := normalizeAndValidate(&cfg); err != nil {
 		return nil, err
 	}
 
 	return model.NewProject(absPath, rootDir, cfg), nil
 }
 
-func discoverConfigPath(cwd string) (string, error) {
-	candidates := []string{
-		DefaultConfigFile,
-		LegacyConfigFile,
-		DeprecatedConfigFile,
-	}
-	for _, name := range candidates {
-		path := filepath.Join(cwd, name)
-		_, err := os.Stat(path)
-		if err == nil {
-			return path, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("check config candidate %q: %w", name, err)
-		}
-	}
-	return filepath.Join(cwd, DefaultConfigFile), nil
-}
-
-func normalizeAndValidate(cfg *model.Config, rootDir string) error {
+func normalizeAndValidate(cfg *model.Config) error {
 	if cfg.Version != model.CurrentVersion {
 		return fmt.Errorf("unsupported config version %d (expected %d)", cfg.Version, model.CurrentVersion)
 	}
@@ -94,71 +70,42 @@ func normalizeAndValidate(cfg *model.Config, rootDir string) error {
 		cfg.Defaults.Shell = model.DefaultShell
 	}
 
-	if len(cfg.Workspaces) == 0 {
-		return fmt.Errorf("workspaces must contain at least one workspace")
+	if len(cfg.Processes) == 0 {
+		return fmt.Errorf("processes must contain at least one process")
 	}
 
-	seen := make(map[string]struct{}, len(cfg.Workspaces))
-	for i := range cfg.Workspaces {
-		ws := &cfg.Workspaces[i]
-		if err := normalizeWorkspace(ws, rootDir); err != nil {
-			return fmt.Errorf("workspace[%d]: %w", i, err)
+	seen := make(map[string]struct{}, len(cfg.Processes))
+	for i := range cfg.Processes {
+		proc := &cfg.Processes[i]
+		if err := normalizeProcess(proc); err != nil {
+			return fmt.Errorf("process[%d]: %w", i, err)
 		}
-		if _, exists := seen[ws.Name]; exists {
-			return fmt.Errorf("duplicate workspace name %q", ws.Name)
+		if _, exists := seen[proc.Name]; exists {
+			return fmt.Errorf("duplicate process name %q", proc.Name)
 		}
-		seen[ws.Name] = struct{}{}
+		seen[proc.Name] = struct{}{}
 	}
 
 	return nil
 }
 
-func normalizeWorkspace(ws *model.Workspace, rootDir string) error {
-	ws.Name = strings.TrimSpace(ws.Name)
-	if ws.Name == "" {
+func normalizeProcess(proc *model.Process) error {
+	proc.Name = strings.TrimSpace(proc.Name)
+	if proc.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if !workspaceNamePattern.MatchString(ws.Name) {
-		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-')", ws.Name)
+	if !processNamePattern.MatchString(proc.Name) {
+		return fmt.Errorf("name %q is invalid (allowed: letters, numbers, '.', '_', '-')", proc.Name)
 	}
 
-	ws.Command = strings.TrimSpace(ws.Command)
-	if ws.Command == "" {
+	proc.Command = strings.TrimSpace(proc.Command)
+	if proc.Command == "" {
 		return fmt.Errorf("command is required")
 	}
 
-	ws.Dir = strings.TrimSpace(ws.Dir)
-	if ws.Dir == "" {
-		return fmt.Errorf("dir is required")
+	proc.Group = strings.TrimSpace(proc.Group)
+	if proc.Env == nil {
+		proc.Env = map[string]string{}
 	}
-
-	resolved := ws.Dir
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(rootDir, resolved)
-	}
-	resolved = filepath.Clean(resolved)
-	info, err := os.Stat(resolved)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("dir %q does not exist", ws.Dir)
-		}
-		return fmt.Errorf("read dir %q: %w", ws.Dir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("dir %q is not a directory", ws.Dir)
-	}
-	ws.ResolvedDir = resolved
-
-	ws.Group = strings.TrimSpace(ws.Group)
-	if ws.Group == "" {
-		ws.EffectiveGroup = model.ImplicitGroupPrefix + ws.Name
-	} else {
-		ws.EffectiveGroup = ws.Group
-	}
-
-	if ws.Env == nil {
-		ws.Env = map[string]string{}
-	}
-
 	return nil
 }

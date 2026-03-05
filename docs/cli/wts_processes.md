@@ -1,15 +1,15 @@
-## wts validate
+## wts processes
 
-Validate .wts.yaml
+List process profiles from config
 
 ```
-wts validate [flags]
+wts processes [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help   help for processes
 ```
 
 ### Options inherited from parent commands

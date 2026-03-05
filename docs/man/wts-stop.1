@@ -2,30 +2,24 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-stop - Stop workspace process(es)
+wts-stop - Stop worktree process(es)
 
 
 .SH SYNOPSIS
-\fBwts stop [workspace] [flags]\fP
+\fBwts stop [worktree] [flags]\fP
 
 
 .SH DESCRIPTION
-Stop one or more workspace processes.
-
-.PP
-You must choose exactly one scope:
-- workspace argument: stop one workspace
-- --group : stop current active workspace in that group
-- --all: stop all configured workspaces
+Stop worktree process(es)
 
 
 .SH OPTIONS
 \fB--all\fP[=false]
-	stop all running workspace processes
+	stop all worktrees
 
 .PP
 \fB--group\fP=""
-	stop active workspace in group
+	stop active worktree in group
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -34,15 +28,11 @@ You must choose exactly one scope:
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
-	path to .wts.yaml (legacy: .worktreeswitch.yaml/.workswitch.yaml)
+	path to .wts.yaml
 
-
-.SH EXAMPLE
-.EX
-  wts stop api-main
-  wts stop --group backend
-  wts stop --all
-.EE
+.PP
+\fB--state\fP=""
+	path to state file (default ~/.workswitch/state.yaml)
 
 
 .SH SEE ALSO
