@@ -6,6 +6,14 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
 
+# Allow: make run tui / make run switch demo-local
+ifeq ($(firstword $(MAKECMDGOALS)),run)
+ifeq ($(strip $(ARGS)),)
+ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+endif
+$(eval $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS)):;@:)
+endif
+
 .PHONY: help airflow check tidy fmt vet lint test coverage docs build run install clean
 
 help: ## Show available targets
