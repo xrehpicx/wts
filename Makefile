@@ -15,7 +15,7 @@ endif
 $(eval $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS)):;@:)
 endif
 
-.PHONY: help airflow check tidy fmt vet lint test coverage docs build run install clean
+.PHONY: help airflow check tidy fmt vet lint test coverage docs build run install clean release
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,3 +57,6 @@ install: ## Install binary in GOPATH/bin
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) coverage.out
+
+release: airflow ## Bump patch version, tag, and push (skip if no changes since last tag)
+	@scripts/release.sh
