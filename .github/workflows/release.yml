@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify
+        run: make airflow
+
+      - name: Bump version and tag
+        run: |
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          commits_since=$(git rev-list "${latest}..HEAD" --count)
+
+          if [ "$commits_since" = "0" ]; then
+            echo "No changes since ${latest} — nothing to release."
+            exit 0
+          fi
+
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+
+          case "${{ inputs.bump }}" in
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          next="v${major}.${minor}.${patch}"
+          echo "NEXT_TAG=${next}" >> "$GITHUB_ENV"
+          echo "Releasing ${next} (${commits_since} commits since ${latest})"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${next}"
+          git push origin "${next}"
+
+      - name: Create GitHub release
+        if: env.NEXT_TAG != ''
+        run: |
+          gh release create "${{ env.NEXT_TAG }}" \
+            --title "${{ env.NEXT_TAG }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

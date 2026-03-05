@@ -559,7 +559,11 @@ func (a *app) newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show wts version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
+			if a.commit != "" {
+				_, _ = fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
+			} else {
+				_, _ = fmt.Fprintf(a.out, "wts %s\n", a.version)
+			}
 			return nil
 		},
 	}
