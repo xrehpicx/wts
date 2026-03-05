@@ -3,7 +3,8 @@ BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP_NAME)
 GO := go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
+COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
 
 # Allow: make run tui / make run switch demo-local

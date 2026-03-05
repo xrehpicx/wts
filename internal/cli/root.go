@@ -24,6 +24,7 @@ import (
 
 type app struct {
 	version    string
+	commit     string
 	configPath string
 	in         io.Reader
 	out        io.Writer
@@ -39,9 +40,10 @@ type runtimeContext struct {
 	manager   *runtime.Manager
 }
 
-func NewRootCmd(version string) *cobra.Command {
+func NewRootCmd(version, commit string) *cobra.Command {
 	a := &app{
 		version: version,
+		commit:  commit,
 		in:      os.Stdin,
 		out:     os.Stdout,
 		err:     os.Stderr,
@@ -91,8 +93,8 @@ process in the target worktree.`,
 	return root
 }
 
-func Execute(version string) error {
-	return NewRootCmd(version).Execute()
+func Execute(version, commit string) error {
+	return NewRootCmd(version, commit).Execute()
 }
 
 func (a *app) withProject(fn func(*model.Project) error) error {
@@ -557,7 +559,7 @@ func (a *app) newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show wts version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintf(a.out, "wts %s\n", a.version)
+			_, _ = fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
 			return nil
 		},
 	}

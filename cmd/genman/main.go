@@ -17,7 +17,7 @@ func main() {
 	version := flag.String("version", "dev", "version string to embed in docs")
 	flag.Parse()
 
-	root := cli.NewRootCmd(*version)
+	root := cli.NewRootCmd(*version, "dev")
 	root.DisableAutoGenTag = true
 
 	if err := os.MkdirAll(*manDir, 0o755); err != nil {
