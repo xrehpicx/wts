@@ -46,6 +46,16 @@ func ProcessOptionKey(worktreeDir string) string {
 	return fmt.Sprintf("@wts_process_%x", hash[:6])
 }
 
+// IsShellCommand returns true if the command name looks like a shell.
+// Used to detect if a pane's foreground has returned to its shell (process exited).
+func IsShellCommand(cmd string) bool {
+	switch cmd {
+	case "fish", "bash", "zsh", "sh", "dash", "ksh", "csh", "tcsh", "nu", "elvish", "ion":
+		return true
+	}
+	return false
+}
+
 func sanitize(value string) string {
 	if value == "" {
 		return "default"

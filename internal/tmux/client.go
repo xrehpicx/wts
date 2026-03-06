@@ -13,9 +13,10 @@ import (
 )
 
 type PaneInfo struct {
-	ID    string
-	Title string
-	PID   string
+	ID      string
+	Title   string
+	PID     string
+	Command string // current foreground command name
 }
 
 type Backend interface {
@@ -279,7 +280,7 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{pane_title}\t#{pane_pid}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}
@@ -289,15 +290,19 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
+		parts := strings.SplitN(line, "\t", 4)
 		if len(parts) < 3 {
 			continue
 		}
-		panes = append(panes, PaneInfo{
+		info := PaneInfo{
 			ID:    parts[0],
 			Title: parts[1],
 			PID:   parts[2],
-		})
+		}
+		if len(parts) >= 4 {
+			info.Command = parts[3]
+		}
+		panes = append(panes, info)
 	}
 	return panes, nil
 }

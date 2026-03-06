@@ -69,16 +69,17 @@ func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) e
 	if len(m.panes[window]) > 0 {
 		m.panes[window][len(m.panes[window])-1].Title = title
 	} else {
-		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Title: title, PID: "1000"}}
+		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Title: title, PID: "1000", Command: "node"}}
 	}
 	return nil
 }
 func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ string, _ map[string]string, paneTitle string) error {
 	id := len(m.panes[window])
 	m.panes[window] = append(m.panes[window], tmux.PaneInfo{
-		ID:    "%" + string(rune('0'+id)),
-		Title: paneTitle,
-		PID:   "1001",
+		ID:      "%" + string(rune('0'+id)),
+		Title:   paneTitle,
+		PID:     "1001",
+		Command: "node",
 	})
 	m.startCount[window]++
 	return nil
@@ -519,6 +520,77 @@ func TestLogsErrorsWhenWorktreeNotRunning(t *testing.T) {
 	_, err := manager.Logs(ctx, "repo-main", "", 100)
 	if err == nil {
 		t.Fatalf("expected error for stopped worktree")
+	}
+}
+
+func TestStopProcessMatchesLegacyPane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	// Simulate a legacy worktree started without pane titles.
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.windows[window] = true
+	backend.panes[window] = []tmux.PaneInfo{
+		{ID: "%0", Title: "fish", PID: "1234", Command: "node"}, // legacy: shell name as title, not wts: prefix
+	}
+
+	// StopProcess should match the legacy pane.
+	if err := manager.StopProcess(ctx, "repo-main", "api"); err != nil {
+		t.Fatalf("expected legacy pane to match, got: %v", err)
+	}
+	if backend.windows[window] {
+		t.Fatalf("expected window stopped after killing sole legacy pane")
+	}
+}
+
+func TestStatusDetectsExitedViaShellCommand(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Simulate process exited: pane's current command is now the shell.
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.panes[window][0].Command = "fish"
+
+	rows, err := manager.Status(ctx, "repo-main")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if !rows[0].Exited {
+		t.Fatalf("expected exited=true when pane command is shell")
+	}
+	if !rows[0].Running {
+		t.Fatalf("expected running=true (window still exists)")
+	}
+}
+
+func TestStatusRunningProcessNotExited(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Pane command is "node" (not a shell) — process is running.
+	rows, err := manager.Status(ctx, "repo-main")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if rows[0].Exited {
+		t.Fatalf("expected exited=false when pane command is not a shell")
 	}
 }
 

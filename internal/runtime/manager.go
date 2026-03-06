@@ -207,6 +207,11 @@ func (m *Manager) findProcessPane(ctx context.Context, wt *gitwt.Worktree, proce
 			return &panes[i]
 		}
 	}
+	// Fallback: legacy pane without wts: prefix (started before multi-process).
+	// If there's exactly one pane with no wts: title, assume it's the process.
+	if len(panes) == 1 && tmux.ProcessFromPaneTitle(panes[0].Title) == "" {
+		return &panes[0]
+	}
 	return nil
 }
 
@@ -384,7 +389,7 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 							procName = primaryProcess
 						}
 					}
-					exited := m.backend.PaneExitedByPID(ctx, pane.PID)
+					exited := tmux.IsShellCommand(pane.Command)
 					procs = append(procs, ProcessStatus{
 						Name:    procName,
 						Running: true,

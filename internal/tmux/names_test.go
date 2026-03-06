@@ -47,6 +47,24 @@ func TestProcessPaneTitle(t *testing.T) {
 	}
 }
 
+func TestIsShellCommand(t *testing.T) {
+	t.Parallel()
+
+	shells := []string{"fish", "bash", "zsh", "sh", "dash", "ksh"}
+	for _, s := range shells {
+		if !IsShellCommand(s) {
+			t.Errorf("expected %q to be shell", s)
+		}
+	}
+
+	nonShells := []string{"node", "go", "python", "make", "npm", ""}
+	for _, s := range nonShells {
+		if IsShellCommand(s) {
+			t.Errorf("expected %q to NOT be shell", s)
+		}
+	}
+}
+
 func TestProcessFromPaneTitle(t *testing.T) {
 	t.Parallel()
 
