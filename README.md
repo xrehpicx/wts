@@ -30,13 +30,11 @@ No extra `~/.workswitch/state.yaml` file is used.
 go install github.com/xrehpicx/wts@latest
 ```
 
-To install a specific version:
+## Update
 
 ```bash
-go install github.com/xrehpicx/wts@v0.2.0
+go install github.com/xrehpicx/wts@latest
 ```
-
-To update to the latest release, re-run the install command above.
 
 Verify:
 
