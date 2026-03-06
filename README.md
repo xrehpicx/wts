@@ -2,6 +2,8 @@
 
 `workswitch` is a tmux-backed process handoff tool for Git worktrees.
 
+<video src="demo.mov" autoplay loop muted></video>
+
 - Binary: `wts`
 - Aliases: `workswitch`, `wks`
 - `wts` means `worktree switch`
