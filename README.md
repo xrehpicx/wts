@@ -27,13 +27,13 @@ No extra `~/.workswitch/state.yaml` file is used.
 ## Install
 
 ```bash
-go install github.com/xrehpicx/wts@latest
+go install github.com/xrehpicx/wts@main
 ```
 
 ## Update
 
 ```bash
-go install github.com/xrehpicx/wts@latest
+go install github.com/xrehpicx/wts@main
 ```
 
 Verify:
@@ -191,7 +191,7 @@ git push origin v0.2.0
 Users update with:
 
 ```bash
-go install github.com/xrehpicx/wts@latest
+go install github.com/xrehpicx/wts@main
 ```
 
 ## Project docs
