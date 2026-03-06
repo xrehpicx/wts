@@ -290,12 +290,12 @@ func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) {
 	}
 	// Set pane title before the shell starts — the shell will likely
 	// overwrite pane_title via escape sequences, but @wts_process persists.
-	c.runner.Run(ctx, c.bin, "select-pane", "-t", target, "-T", paneTitle)
+	_, _ = c.runner.Run(ctx, c.bin, "select-pane", "-t", target, "-T", paneTitle)
 	if processName := ProcessFromPaneTitle(paneTitle); processName != "" {
-		c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneProcessOptionKey(), processName)
+		_, _ = c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneProcessOptionKey(), processName)
 	}
 	// Keep pane alive after process exit so we can still read logs and identity.
-	c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on")
+	_, _ = c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on")
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
