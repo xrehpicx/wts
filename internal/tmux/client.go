@@ -18,13 +18,14 @@ type PaneInfo struct {
 	Title   string
 	PID     string
 	Command string // current foreground command name
+	Dead    bool   // true when pane process has exited (remain-on-exit)
 }
 
 type Backend interface {
 	EnsureTmux(ctx context.Context) error
 	EnsureSession(ctx context.Context, session string) error
 	HasWindow(ctx context.Context, session, window string) (bool, error)
-	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string) error
+	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
 	StopWindow(ctx context.Context, session, window string, timeout time.Duration) error
 	SetSessionOption(ctx context.Context, session, key, value string) error
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
@@ -116,7 +117,7 @@ func (c *Client) HasWindow(ctx context.Context, session, window string) (bool, e
 	return false, fmt.Errorf("check window %q in session %q: %w", window, session, err)
 }
 
-func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string) error {
+func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
 	exists, err := c.HasWindow(ctx, session, window)
 	if err != nil {
 		return err
@@ -131,8 +132,11 @@ func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, s
 		return fmt.Errorf("create window %q: %w", window, err)
 	}
 
+	target := session + ":" + window
+	c.hardenPane(ctx, target, paneTitle)
+
 	payload := buildPayload(command, env)
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", session+":"+window, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
+	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", target, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
 		return fmt.Errorf("start command for workspace window %q: %w", window, err)
 	}
 	return nil
@@ -254,15 +258,7 @@ func (c *Client) Attach(ctx context.Context, session, window string) error {
 }
 
 func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string) error {
-	_, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", session+":"+window, "-T", title)
-	if err != nil {
-		return fmt.Errorf("set pane title %q: %w", title, err)
-	}
-	if processName := ProcessFromPaneTitle(title); processName != "" {
-		if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", session+":"+window, "-q", PaneProcessOptionKey(), processName); err != nil {
-			return fmt.Errorf("set pane process %q: %w", processName, err)
-		}
-	}
+	c.hardenPane(ctx, session+":"+window, title)
 	return nil
 }
 
@@ -274,14 +270,7 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 	}
 	paneID = strings.TrimSpace(paneID)
 
-	if _, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", paneID, "-T", paneTitle); err != nil {
-		return fmt.Errorf("set pane title %q: %w", paneTitle, err)
-	}
-	if processName := ProcessFromPaneTitle(paneTitle); processName != "" {
-		if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", paneID, "-q", PaneProcessOptionKey(), processName); err != nil {
-			return fmt.Errorf("set pane process %q: %w", processName, err)
-		}
-	}
+	c.hardenPane(ctx, paneID, paneTitle)
 
 	payload := buildPayload(command, env)
 	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
@@ -290,8 +279,27 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 	return nil
 }
 
+// hardenPane configures a pane for reliable identity tracking across
+// arbitrary tmux configurations. It sets the pane title, the @wts_process
+// per-pane option (which cannot be overwritten by the shell, unlike pane_title),
+// and enables remain-on-exit so panes survive process exit and logs remain
+// accessible.
+func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) {
+	if paneTitle == "" {
+		return
+	}
+	// Set pane title before the shell starts — the shell will likely
+	// overwrite pane_title via escape sequences, but @wts_process persists.
+	c.runner.Run(ctx, c.bin, "select-pane", "-t", target, "-T", paneTitle)
+	if processName := ProcessFromPaneTitle(paneTitle); processName != "" {
+		c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneProcessOptionKey(), processName)
+	}
+	// Keep pane alive after process exit so we can still read logs and identity.
+	c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on")
+}
+
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}
@@ -301,7 +309,7 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 5)
+		parts := strings.SplitN(line, "\t", 6)
 		if len(parts) < 4 {
 			continue
 		}
@@ -313,6 +321,9 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 		}
 		if len(parts) >= 5 {
 			info.Command = parts[4]
+		}
+		if len(parts) >= 6 {
+			info.Dead = parts[5] == "1"
 		}
 		panes = append(panes, info)
 	}

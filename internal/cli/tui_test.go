@@ -97,7 +97,10 @@ func TestRenderGroupLogsKeepsProcessesSeparate(t *testing.T) {
 
 	lines := m.renderGroupLogs(target, 6, 80)
 	rendered := strings.Join(lines, "\n")
-	if !strings.Contains(rendered, "[test-loop]") || !strings.Contains(rendered, "[demo-script]") {
-		t.Fatalf("expected separate group log headers, got %q", rendered)
+	if !strings.Contains(rendered, "test-loop") || !strings.Contains(rendered, "demo-script") {
+		t.Fatalf("expected both process names in group log output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "test-1") || !strings.Contains(rendered, "demo-1") {
+		t.Fatalf("expected log lines from both processes, got %q", rendered)
 	}
 }

@@ -18,7 +18,7 @@ type Backend interface {
 	EnsureTmux(ctx context.Context) error
 	EnsureSession(ctx context.Context, session string) error
 	HasWindow(ctx context.Context, session, window string) (bool, error)
-	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string) error
+	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
 	StopWindow(ctx context.Context, session, window string, timeout time.Duration) error
 	SetSessionOption(ctx context.Context, session, key, value string) error
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
@@ -216,12 +216,9 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		if err := m.backend.StartWindowCommand(
 			ctx, m.session, windowName,
 			wt.Dir, m.project.Defaults.Shell,
-			proc.Command, proc.Env,
+			proc.Command, proc.Env, paneTitle,
 		); err != nil {
 			return fmt.Errorf("start worktree %q: %w", wt.Name, err)
-		}
-		if err := m.backend.SetPaneTitle(ctx, m.session, windowName, paneTitle); err != nil {
-			return fmt.Errorf("set pane title in %q: %w", wt.Name, err)
 		}
 		windowExists = true
 	}
@@ -255,14 +252,21 @@ func (m *Manager) findProcessPane(ctx context.Context, wt *gitwt.Worktree, proce
 		return nil
 	}
 	title := tmux.ProcessPaneTitle(processName)
+	// Match by @wts_process pane option first (reliable, not overwritten by shell).
+	for i := range panes {
+		if strings.TrimSpace(panes[i].Process) == processName {
+			return &panes[i]
+		}
+	}
+	// Fallback: match by pane title.
 	for i := range panes {
 		if panes[i].Title == title {
 			return &panes[i]
 		}
 	}
 	// Fallback: legacy pane without wts: prefix (started before multi-process).
-	// If there's exactly one pane with no wts: title, assume it's the process.
-	if len(panes) == 1 && tmux.ProcessFromPaneTitle(panes[0].Title) == "" {
+	// Only match if there's exactly one pane with no identity at all.
+	if len(panes) == 1 && strings.TrimSpace(panes[0].Process) == "" && tmux.ProcessFromPaneTitle(panes[0].Title) == "" {
 		return &panes[0]
 	}
 	return nil
@@ -336,19 +340,33 @@ func (m *Manager) StopGroup(ctx context.Context, worktree, groupName string) err
 	}
 
 	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-	stoppedAny := false
-	for _, processName := range group.Processes {
-		pane := m.findProcessPane(ctx, wt, processName)
-		if pane == nil {
-			continue
+
+	// Collect all panes belonging to the group's processes.
+	memberSet := make(map[string]bool, len(group.Processes))
+	for _, name := range group.Processes {
+		memberSet[name] = true
+	}
+	panes, err := m.backend.ListPanes(ctx, m.session, tmux.WindowName(wt.Dir))
+	if err != nil {
+		panes = nil
+	}
+	var toStop []tmux.PaneInfo
+	for _, pane := range panes {
+		procName := strings.TrimSpace(pane.Process)
+		if procName == "" {
+			procName = tmux.ProcessFromPaneTitle(pane.Title)
 		}
+		if memberSet[procName] {
+			toStop = append(toStop, pane)
+		}
+	}
+	if len(toStop) == 0 {
+		return fmt.Errorf("group %q not running in worktree %q", group.Name, wt.Name)
+	}
+	for _, pane := range toStop {
 		if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
 			return err
 		}
-		stoppedAny = true
-	}
-	if !stoppedAny {
-		return fmt.Errorf("group %q not running in worktree %q", group.Name, wt.Name)
 	}
 	return m.syncActiveStateAfterStopTargets(ctx, wt, group.Processes)
 }
@@ -513,11 +531,13 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 						}
 						groupMatchCount[procName]++
 					}
-					exited := false
-					if pane.PID != "" {
-						exited = m.backend.PaneExitedByPID(ctx, pane.PID)
-					} else {
-						exited = tmux.IsShellCommand(pane.Command)
+					exited := pane.Dead
+					if !exited {
+						if pane.PID != "" {
+							exited = m.backend.PaneExitedByPID(ctx, pane.PID)
+						} else {
+							exited = tmux.IsShellCommand(pane.Command)
+						}
 					}
 					procs = append(procs, ProcessStatus{
 						Name:    procName,
@@ -668,7 +688,11 @@ func (m *Manager) syncActiveStateAfterStopTargets(ctx context.Context, wt *gitwt
 
 	nextActiveProc := ""
 	for _, pane := range panes {
-		if name := tmux.ProcessFromPaneTitle(pane.Title); name != "" {
+		name := strings.TrimSpace(pane.Process)
+		if name == "" {
+			name = tmux.ProcessFromPaneTitle(pane.Title)
+		}
+		if name != "" {
 			nextActiveProc = name
 			break
 		}

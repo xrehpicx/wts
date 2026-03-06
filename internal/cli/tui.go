@@ -211,6 +211,13 @@ func newTUIStyles() tuiStyles {
 func newTUIModel(rc *runtimeContext) *tuiModel {
 	helpModel := help.New()
 	helpModel.ShowAll = false
+	// Use basic ANSI colors inherited from the terminal for the shortcut line.
+	helpModel.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Bold(true)
+	helpModel.Styles.ShortDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	helpModel.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	helpModel.Styles.FullKey = helpModel.Styles.ShortKey
+	helpModel.Styles.FullDesc = helpModel.Styles.ShortDesc
+	helpModel.Styles.FullSeparator = helpModel.Styles.ShortSeparator
 
 	s := spinner.New()
 	s.Spinner = spinner.Spinner{
@@ -778,7 +785,7 @@ func (m *tuiModel) renderFooter(width int) string {
 	if m.showAll {
 		helpView = m.help.FullHelpView(m.keys.FullHelp())
 	}
-	return " " + m.styles.footer.Render(helpView)
+	return " " + helpView
 }
 
 // --- Navigation ---
@@ -852,34 +859,58 @@ func (m *tuiModel) renderGroupLogs(target model.Target, logSpace, maxW int) []st
 		return nil
 	}
 
-	sectionCount := len(target.ProcessNames)
-	headerSpace := sectionCount
-	lineBudget := max(0, logSpace-headerSpace)
-	linesPerProcess := 1
-	if sectionCount > 0 {
-		linesPerProcess = max(1, lineBudget/sectionCount)
+	// Build a tag style per process using the process name as a prefix.
+	// Interleave the most recent lines from each process to show a unified
+	// chronological-ish view (latest output at the bottom).
+
+	// Collect tail lines from each process, most-recent-last.
+	type taggedLine struct {
+		tag  string
+		text string
+	}
+	var merged []taggedLine
+	nprocs := len(target.ProcessNames)
+
+	// Give each process a fair share of lines, but let any process use
+	// surplus space if another has fewer lines.
+	budget := logSpace
+	remaining := make([]string, 0, nprocs)
+	for _, name := range target.ProcessNames {
+		if len(m.logLines[name]) > 0 {
+			remaining = append(remaining, name)
+		}
+	}
+	if len(remaining) == 0 {
+		return []string{m.styles.dimText.Render("waiting for output...")}
 	}
 
-	lines := make([]string, 0, logSpace)
-	for _, processName := range target.ProcessNames {
-		if len(lines) >= logSpace {
-			break
+	perProc := max(1, budget/len(remaining))
+	for _, name := range remaining {
+		plog := m.logLines[name]
+		n := min(perProc, len(plog))
+		start := len(plog) - n
+		for _, l := range plog[start:] {
+			merged = append(merged, taggedLine{tag: name, text: l})
 		}
-		lines = append(lines, m.styles.dimText.Render("["+processName+"]"))
-		processLogs := m.logLines[processName]
-		if len(processLogs) == 0 {
-			if len(lines) < logSpace {
-				lines = append(lines, m.styles.dimText.Render("waiting for logs..."))
-			}
-			continue
-		}
-		start := max(0, len(processLogs)-linesPerProcess)
-		for _, line := range processLogs[start:] {
-			if len(lines) >= logSpace {
-				break
-			}
-			lines = append(lines, m.styles.logText.Render(truncateLine(line, maxW)))
-		}
+	}
+
+	// Trim to fit.
+	if len(merged) > logSpace {
+		merged = merged[len(merged)-logSpace:]
+	}
+
+	// Compute the shortest unambiguous tag for each process name.
+	shortTag := make(map[string]string, nprocs)
+	for _, name := range target.ProcessNames {
+		shortTag[name] = name
+	}
+
+	lines := make([]string, 0, len(merged))
+	for _, ml := range merged {
+		tag := m.styles.dimText.Render(shortTag[ml.tag] + " │ ")
+		tagW := lipgloss.Width(tag)
+		textW := max(1, maxW-tagW)
+		lines = append(lines, tag+m.styles.logText.Render(truncateLine(ml.text, textW)))
 	}
 	return lines
 }
@@ -1215,7 +1246,7 @@ func (m *tuiModel) fetchLogsCmd() tea.Cmd {
 		linesByTarget := map[string][]string{}
 		if ok && target.Kind == model.TargetGroup {
 			for _, processName := range target.ProcessNames {
-				output, err := m.rc.manager.Logs(context.Background(), dir, processName, 80)
+				output, err := m.rc.manager.Logs(context.Background(), dir, processName, 200)
 				if err != nil {
 					continue
 				}

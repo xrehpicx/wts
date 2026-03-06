@@ -37,9 +37,12 @@ func (m *mockBackend) EnsureSession(context.Context, string) error {
 func (m *mockBackend) HasWindow(_ context.Context, _ string, window string) (bool, error) {
 	return m.windows[window], nil
 }
-func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ string, _ string, _ string, _ map[string]string) error {
+func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ string, _ string, _ string, _ map[string]string, paneTitle string) error {
 	m.windows[window] = true
 	m.startCount[window]++
+	if paneTitle != "" {
+		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Process: tmux.ProcessFromPaneTitle(paneTitle), Title: paneTitle, PID: "1000", Command: "node"}}
+	}
 	return nil
 }
 func (m *mockBackend) StopWindow(_ context.Context, _ string, window string, _ time.Duration) error {
