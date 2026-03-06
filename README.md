@@ -17,7 +17,6 @@ When you switch/start/restart on a target worktree:
 1. the previously active worktree process is stopped
 2. the selected process profile, or every member of the selected process group, starts in the target worktree dir
 
-No extra `~/.workswitch/state.yaml` file is used.
 
 ## Requirements
 
