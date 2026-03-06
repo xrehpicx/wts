@@ -417,6 +417,51 @@ func TestStopProcessErrorsWhenNotRunning(t *testing.T) {
 	}
 }
 
+func TestStopProcessClearsActiveWhenLastPaneStops(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Switch(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("switch repo-main: %v", err)
+	}
+	if err := manager.StopProcess(ctx, "repo-main", "api"); err != nil {
+		t.Fatalf("stop api: %v", err)
+	}
+
+	if backend.options[tmux.ActiveWorktreeOptionKey()] != "" {
+		t.Fatalf("expected active worktree cleared, got %q", backend.options[tmux.ActiveWorktreeOptionKey()])
+	}
+	if backend.options[tmux.ActiveProcessOptionKey()] != "" {
+		t.Fatalf("expected active process cleared, got %q", backend.options[tmux.ActiveProcessOptionKey()])
+	}
+}
+
+func TestStopProcessRepointsActiveProcessToRemainingPane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "api"}); err != nil {
+		t.Fatalf("start api: %v", err)
+	}
+	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("start web: %v", err)
+	}
+	if err := manager.StopProcess(ctx, "repo-main", "web"); err != nil {
+		t.Fatalf("stop web: %v", err)
+	}
+
+	if backend.options[tmux.ActiveWorktreeOptionKey()] != "/tmp/repo-main" {
+		t.Fatalf("expected active worktree preserved, got %q", backend.options[tmux.ActiveWorktreeOptionKey()])
+	}
+	if backend.options[tmux.ActiveProcessOptionKey()] != "api" {
+		t.Fatalf("expected active process updated to api, got %q", backend.options[tmux.ActiveProcessOptionKey()])
+	}
+}
+
 func TestStatusReportsMultipleProcesses(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()

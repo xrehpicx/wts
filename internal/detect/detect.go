@@ -1,6 +1,9 @@
 package detect
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // Process is a single inferred process entry.
 type Process struct {
@@ -53,7 +56,7 @@ func Run(dir, configDir string) (*Result, error) {
 	for _, d := range All(configDir) {
 		result, err := d.Detect(dir)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("%s detector: %w", d.Name(), err)
 		}
 		if result != nil {
 			sort.Slice(result.Processes, func(i, j int) bool {

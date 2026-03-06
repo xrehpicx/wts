@@ -776,9 +776,9 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 	m.loading = true
 	m.loadingDir = dir
 
-	// If the worktree already has processes running, use Start (additive).
-	// Otherwise use Switch (preemptive: stops other active worktree).
-	useAdditive := row.Running
+	// If the worktree has at least one live process, use Start (additive).
+	// Otherwise use Switch (preemptive: stops the other active worktree).
+	useAdditive := row.Running && !row.Exited
 	if useAdditive {
 		m.loadingMsg = "starting " + proc + " in " + name + "..."
 	} else {

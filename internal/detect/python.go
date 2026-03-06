@@ -38,25 +38,46 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 		return &Result{Type: "python-django", Processes: procs}, nil
 	}
 
-	runner := pythonRunner(dir)
-	procs = append(procs, Process{
-		Name:    "dev",
-		Command: runner + " run dev",
-	})
-	procs = append(procs, Process{
-		Name:    "test",
-		Command: runner + " run test",
-	})
+	if runCmd := pythonRunCommand(dir); runCmd != "" {
+		procs = append(procs, Process{
+			Name:    "run",
+			Command: runCmd,
+		})
+	}
+	if testCmd := pythonTestCommand(dir); testCmd != "" {
+		procs = append(procs, Process{
+			Name:    "test",
+			Command: testCmd,
+		})
+	}
 
 	return &Result{Type: "python", Processes: procs}, nil
 }
 
-func pythonRunner(dir string) string {
+func pythonCommandPrefix(dir string) string {
 	if _, err := os.Stat(filepath.Join(dir, "poetry.lock")); err == nil {
-		return "poetry"
+		return "poetry run "
 	}
 	if _, err := os.Stat(filepath.Join(dir, "uv.lock")); err == nil {
-		return "uv"
+		return "uv run "
 	}
-	return "python -m"
+	return ""
+}
+
+func pythonRunCommand(dir string) string {
+	prefix := pythonCommandPrefix(dir)
+	for _, entry := range []string{"main.py", "app.py"} {
+		if _, err := os.Stat(filepath.Join(dir, entry)); err == nil {
+			return prefix + "python " + entry
+		}
+	}
+	return ""
+}
+
+func pythonTestCommand(dir string) string {
+	prefix := pythonCommandPrefix(dir)
+	if prefix == "" {
+		return ""
+	}
+	return prefix + "pytest"
 }

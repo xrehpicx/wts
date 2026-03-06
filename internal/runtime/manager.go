@@ -257,7 +257,10 @@ func (m *Manager) StopProcess(ctx context.Context, worktree, processName string)
 		return fmt.Errorf("process %q not running in worktree %q", processName, wt.Name)
 	}
 	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-	return m.backend.StopPane(ctx, pane.ID, timeout)
+	if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
+		return err
+	}
+	return m.syncActiveStateAfterStopProcess(ctx, wt, processName)
 }
 
 func (m *Manager) StopActive(ctx context.Context) error {
@@ -510,4 +513,45 @@ func (m *Manager) stopWorktreeProcessByDir(ctx context.Context, worktreeDir stri
 
 func (m *Manager) isRunning(ctx context.Context, wt *gitwt.Worktree) (bool, error) {
 	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Dir))
+}
+
+func (m *Manager) syncActiveStateAfterStopProcess(ctx context.Context, wt *gitwt.Worktree, stoppedProcess string) error {
+	activeDir, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(activeDir) != filepath.Clean(wt.Dir) {
+		return nil
+	}
+
+	windowName := tmux.WindowName(wt.Dir)
+	windowExists, err := m.backend.HasWindow(ctx, m.session, windowName)
+	if err != nil {
+		return err
+	}
+	if !windowExists {
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), ""); err != nil {
+			return err
+		}
+		return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), "")
+	}
+
+	activeProc, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
+	if err != nil {
+		return err
+	}
+	if activeProc != stoppedProcess {
+		return nil
+	}
+
+	panes, err := m.backend.ListPanes(ctx, m.session, windowName)
+	if err != nil {
+		return err
+	}
+	for _, pane := range panes {
+		if name := tmux.ProcessFromPaneTitle(pane.Title); name != "" {
+			return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), name)
+		}
+	}
+	return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), "")
 }

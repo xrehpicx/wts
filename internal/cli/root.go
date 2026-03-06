@@ -107,7 +107,7 @@ func (a *app) withProject(fn func(*model.Project) error) error {
 
 func (a *app) withRuntime(ctx context.Context, fn func(*runtimeContext) error) error {
 	return a.withProject(func(project *model.Project) error {
-		repoRoot, err := resolveRepoRoot()
+		repoRoot, err := resolveRepoRoot(project.RootDir)
 		if err != nil {
 			return err
 		}
@@ -605,8 +605,11 @@ func (a *app) newVersionCmd() *cobra.Command {
 	}
 }
 
-func resolveRepoRoot() (string, error) {
+func resolveRepoRoot(startDir string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	if strings.TrimSpace(startDir) != "" {
+		cmd.Dir = startDir
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))

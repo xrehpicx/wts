@@ -137,6 +137,48 @@ func TestPythonDetector_Django(t *testing.T) {
 	}
 }
 
+func TestPythonDetector_PlainProjectHasNoGuessedCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = 'demo'\n"))
+
+	d := &PythonDetector{}
+	result, err := d.Detect(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+	if result.Type != "python" {
+		t.Fatalf("expected type python, got %s", result.Type)
+	}
+	if len(result.Processes) != 0 {
+		t.Fatalf("expected no guessed processes, got %v", result.Processes)
+	}
+}
+
+func TestPythonDetector_UVProjectUsesValidCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = 'demo'\n"))
+	writeFile(t, filepath.Join(dir, "uv.lock"), []byte(""))
+	writeFile(t, filepath.Join(dir, "main.py"), []byte("print('hi')\n"))
+
+	d := &PythonDetector{}
+	result, err := d.Detect(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+	if len(result.Processes) != 2 {
+		t.Fatalf("expected 2 processes, got %d", len(result.Processes))
+	}
+	if result.Processes[0].Command != "uv run python main.py" && result.Processes[1].Command != "uv run python main.py" {
+		t.Fatalf("expected uv run command, got %v", result.Processes)
+	}
+}
+
 func TestMakefileDetector(t *testing.T) {
 	dir := t.TempDir()
 	content := `.PHONY: build test lint
@@ -257,5 +299,18 @@ func TestRun_NoMatch(t *testing.T) {
 	}
 	if result != nil {
 		t.Fatal("expected nil for empty dir")
+	}
+}
+
+func TestRun_ReturnsDetectorErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), []byte("{not-json"))
+
+	result, err := Run(dir, "")
+	if err == nil {
+		t.Fatal("expected detector error")
+	}
+	if result != nil {
+		t.Fatalf("expected nil result on error, got %v", result)
 	}
 }
