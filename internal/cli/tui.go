@@ -291,7 +291,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logDir = msg.dir
 		}
 	case tickLogsMsg:
-		return m, tea.Batch(m.fetchLogsCmd(), m.scheduleLogRefresh())
+		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd(), m.scheduleLogRefresh())
 	case tea.KeyMsg:
 		if m.filterMode {
 			return m.updateFilterKeys(msg)
