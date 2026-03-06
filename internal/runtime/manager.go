@@ -389,7 +389,12 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 							procName = primaryProcess
 						}
 					}
-					exited := tmux.IsShellCommand(pane.Command)
+					exited := false
+					if pane.PID != "" {
+						exited = m.backend.PaneExitedByPID(ctx, pane.PID)
+					} else {
+						exited = tmux.IsShellCommand(pane.Command)
+					}
 					procs = append(procs, ProcessStatus{
 						Name:    procName,
 						Running: true,

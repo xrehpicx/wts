@@ -11,20 +11,22 @@ import (
 )
 
 type mockBackend struct {
-	windows    map[string]bool
-	options    map[string]string
-	startCount map[string]int
-	stopCount  map[string]int
-	panes      map[string][]tmux.PaneInfo // window -> panes
+	windows     map[string]bool
+	options     map[string]string
+	startCount  map[string]int
+	stopCount   map[string]int
+	panes       map[string][]tmux.PaneInfo // window -> panes
+	exitedByPID map[string]bool
 }
 
 func newMockBackend() *mockBackend {
 	return &mockBackend{
-		windows:    map[string]bool{},
-		options:    map[string]string{},
-		startCount: map[string]int{},
-		stopCount:  map[string]int{},
-		panes:      map[string][]tmux.PaneInfo{},
+		windows:     map[string]bool{},
+		options:     map[string]string{},
+		startCount:  map[string]int{},
+		stopCount:   map[string]int{},
+		panes:       map[string][]tmux.PaneInfo{},
+		exitedByPID: map[string]bool{},
 	}
 }
 
@@ -105,8 +107,8 @@ func (m *mockBackend) StopPane(_ context.Context, paneID string, _ time.Duration
 func (m *mockBackend) CapturePaneByID(context.Context, string, int) (string, error) {
 	return "", nil
 }
-func (m *mockBackend) PaneExitedByPID(context.Context, string) bool {
-	return false
+func (m *mockBackend) PaneExitedByPID(_ context.Context, pid string) bool {
+	return m.exitedByPID[pid]
 }
 
 func testProject() *model.Project {
@@ -545,7 +547,7 @@ func TestStopProcessMatchesLegacyPane(t *testing.T) {
 	}
 }
 
-func TestStatusDetectsExitedViaShellCommand(t *testing.T) {
+func TestStatusDetectsExitedViaPanePID(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
 	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
@@ -555,9 +557,10 @@ func TestStatusDetectsExitedViaShellCommand(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	// Simulate process exited: pane's current command is now the shell.
+	// Simulate process exited: pane has returned to the shell and has no child process.
 	window := tmux.WindowName("/tmp/repo-main")
 	backend.panes[window][0].Command = "fish"
+	backend.exitedByPID[backend.panes[window][0].PID] = true
 
 	rows, err := manager.Status(ctx, "repo-main")
 	if err != nil {
@@ -567,14 +570,14 @@ func TestStatusDetectsExitedViaShellCommand(t *testing.T) {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
 	if !rows[0].Exited {
-		t.Fatalf("expected exited=true when pane command is shell")
+		t.Fatalf("expected exited=true when pane has no child process")
 	}
 	if !rows[0].Running {
 		t.Fatalf("expected running=true (window still exists)")
 	}
 }
 
-func TestStatusRunningProcessNotExited(t *testing.T) {
+func TestStatusKeepsRunningWhenShellCommandButChildStillAlive(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
 	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
@@ -584,13 +587,16 @@ func TestStatusRunningProcessNotExited(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	// Pane command is "node" (not a shell) — process is running.
+	// Repro for the TUI bug: tmux reports the shell, but the pane still has a live child.
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.panes[window][0].Command = "fish"
+
 	rows, err := manager.Status(ctx, "repo-main")
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if rows[0].Exited {
-		t.Fatalf("expected exited=false when pane command is not a shell")
+		t.Fatalf("expected exited=false while pane child process is still alive")
 	}
 }
 
