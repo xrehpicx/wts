@@ -1,10 +1,10 @@
 ## wts processes
 
-List process profiles from config
+List process profiles and groups from config
 
 ### Synopsis
 
-Show process profile names and commands from .wts.yaml.
+Show process profile commands and configured process groups from .wts.yaml.
 
 ```
 wts processes [flags]

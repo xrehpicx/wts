@@ -18,6 +18,10 @@ Open an interactive selector (fzf if installed, fallback prompt otherwise) and s
 	attach/focus tmux after switching
 
 .PP
+\fB--group\fP=""
+	process group name from config
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for pick
 
@@ -35,6 +39,7 @@ Open an interactive selector (fzf if installed, fallback prompt otherwise) and s
 .EX
 wts pick
   wts pick --process demo-script
+  wts pick --group dev
   wts pick --attach
 .EE
 

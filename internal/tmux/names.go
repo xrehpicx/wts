@@ -41,9 +41,21 @@ func ActiveProcessOptionKey() string {
 	return "@wts_active_process"
 }
 
+func ActiveTargetKindOptionKey() string {
+	return "@wts_active_target_kind"
+}
+
+func ActiveTargetNameOptionKey() string {
+	return "@wts_active_target_name"
+}
+
 func ProcessOptionKey(worktreeDir string) string {
 	hash := sha1.Sum([]byte(filepath.Clean(worktreeDir)))
 	return fmt.Sprintf("@wts_process_%x", hash[:6])
+}
+
+func PaneProcessOptionKey() string {
+	return "@wts_process"
 }
 
 // IsShellCommand returns true if the command name looks like a shell.

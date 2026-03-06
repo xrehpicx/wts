@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-start - Start process in a worktree (preempts active)
+wts-start - Start a target in a worktree (additive)
 
 
 .SH SYNOPSIS
@@ -10,16 +10,25 @@ wts-start - Start process in a worktree (preempts active)
 
 
 .SH DESCRIPTION
-Start or move a process profile to a target worktree.
+Start or move a process profile or process group to a target worktree.
 
 .PP
-The currently active worktree process is stopped first, then the target process
-is started in the selected worktree directory.
+\&'switch' preempts: stops the previously active worktree, then starts the target.
+\&'start' is additive: starts the target alongside any already running processes.
+\&'restart' stops and re-starts the selected process or group.
+
+.PP
+Process groups are configured in .wts.yaml and each member process still runs in
+its own tmux pane.
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
 	attach/focus tmux after command
+
+.PP
+\fB--group\fP=""
+	process group name from config
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -39,6 +48,7 @@ is started in the selected worktree directory.
 .EX
 wts start repo-main
   wts start ../repo-agent --process demo-script
+  wts start ../repo-agent --group dev
   wts start /abs/path/to/worktree --attach
 .EE
 

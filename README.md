@@ -8,12 +8,12 @@
 
 ## What it does
 
-`wts` discovers worktrees directly from Git (`git worktree list --porcelain`) and lets you move a configured process between them.
+`wts` discovers worktrees directly from Git (`git worktree list --porcelain`) and lets you move a configured process, or a configured process group, between them.
 
 When you switch/start/restart on a target worktree:
 
 1. the previously active worktree process is stopped
-2. the selected process profile starts in the target worktree dir
+2. the selected process profile, or every member of the selected process group, starts in the target worktree dir
 
 No extra `~/.workswitch/state.yaml` file is used.
 
@@ -73,7 +73,7 @@ See [docs/detectors.md](docs/detectors.md) for the format and examples.
 
 ## Config (`.wts.yaml`)
 
-Only process profiles live in config.
+Process profiles and optional process groups live in config.
 
 ```yaml
 version: 1
@@ -87,7 +87,14 @@ processes:
     command: "pnpm dev"
   - name: demo-script
     command: "./scripts/example-longrun.sh demo-script 3"
+groups:
+  - name: dev
+    processes:
+      - api
+      - web
 ```
+
+Groups are launch targets, not merged commands. Each member still runs in its own tmux pane.
 
 ### Included long-running demo process
 
@@ -105,11 +112,15 @@ wts status
 
 ```bash
 wts switch <worktree> --process api
+wts switch <worktree> --group dev
 wts next --process web
+wts next --group dev
 wts prev
 wts restart <worktree> --process demo-script
+wts restart <worktree> --group dev
 wts stop                # stop active
 wts stop <worktree>     # stop one
+wts stop <worktree> --group dev
 wts stop --all          # stop all discovered worktrees
 wts logs <worktree> --lines 200
 ```
@@ -126,16 +137,19 @@ Shortcuts:
 
 - `n` / `↓`: next worktree
 - `p` / `↑`: previous worktree
-- `←` / `[`: previous process profile
-- `→` / `]`: next process profile
-- `/`: search/filter processes by name
-- `s` / `enter`: switch selected worktree
-- `r`: restart selected worktree
-- `x`: stop selected worktree
+- `←` / `[`: previous process/group target
+- `→` / `]`: next process/group target
+- `/`: search/filter process and group targets by name
+- `s` / `enter`: switch/start selected target in the selected worktree
+- `r`: restart selected target
+- `x`: stop selected target
+- `g`: create a new group and save it into this repo’s `.wts.yaml`
 - `?`: toggle expanded help
 - `q`: quit TUI
 
 Exiting TUI does not stop the running process. It keeps running in tmux until you switch/stop it.
+
+Groups appear in the TUI as `[group] <name>` entries. Press `g` to open the in-TUI group editor, choose member processes, and save the new group back into that repo’s `.wts.yaml`.
 
 ## Help and man pages
 

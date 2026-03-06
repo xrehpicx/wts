@@ -4,7 +4,7 @@ Switch to previous git worktree in list
 
 ### Synopsis
 
-Move to the previous discovered worktree and hand off the selected process profile.
+Move to the previous discovered worktree and hand off the selected process profile or group.
 
 ```
 wts prev [flags]
@@ -15,6 +15,7 @@ wts prev [flags]
 ```
 wts prev
   wts prev --process api
+  wts prev --group dev
   wts prev --attach
 ```
 
@@ -22,6 +23,7 @@ wts prev
 
 ```
       --attach           attach/focus tmux after switching
+      --group string     process group name from config
   -h, --help             help for prev
       --process string   process profile name (default: first process in config)
 ```

@@ -1,13 +1,17 @@
 ## wts start
 
-Start process in a worktree (preempts active)
+Start a target in a worktree (additive)
 
 ### Synopsis
 
-Start or move a process profile to a target worktree.
+Start or move a process profile or process group to a target worktree.
 
-The currently active worktree process is stopped first, then the target process
-is started in the selected worktree directory.
+'switch' preempts: stops the previously active worktree, then starts the target.
+'start' is additive: starts the target alongside any already running processes.
+'restart' stops and re-starts the selected process or group.
+
+Process groups are configured in .wts.yaml and each member process still runs in
+its own tmux pane.
 
 ```
 wts start <worktree> [flags]
@@ -18,6 +22,7 @@ wts start <worktree> [flags]
 ```
 wts start repo-main
   wts start ../repo-agent --process demo-script
+  wts start ../repo-agent --group dev
   wts start /abs/path/to/worktree --attach
 ```
 
@@ -25,6 +30,7 @@ wts start repo-main
 
 ```
       --attach           attach/focus tmux after command
+      --group string     process group name from config
   -h, --help             help for start
       --process string   process profile name (default: first process in config)
 ```

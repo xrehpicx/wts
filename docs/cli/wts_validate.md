@@ -4,7 +4,7 @@ Validate .wts.yaml
 
 ### Synopsis
 
-Validate the process configuration file and print loaded process count.
+Validate the process/group configuration file and print loaded target counts.
 
 ```
 wts validate [flags]

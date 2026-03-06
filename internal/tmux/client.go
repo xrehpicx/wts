@@ -14,6 +14,7 @@ import (
 
 type PaneInfo struct {
 	ID      string
+	Process string
 	Title   string
 	PID     string
 	Command string // current foreground command name
@@ -257,6 +258,11 @@ func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string
 	if err != nil {
 		return fmt.Errorf("set pane title %q: %w", title, err)
 	}
+	if processName := ProcessFromPaneTitle(title); processName != "" {
+		if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", session+":"+window, "-q", PaneProcessOptionKey(), processName); err != nil {
+			return fmt.Errorf("set pane process %q: %w", processName, err)
+		}
+	}
 	return nil
 }
 
@@ -271,6 +277,11 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 	if _, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", paneID, "-T", paneTitle); err != nil {
 		return fmt.Errorf("set pane title %q: %w", paneTitle, err)
 	}
+	if processName := ProcessFromPaneTitle(paneTitle); processName != "" {
+		if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", paneID, "-q", PaneProcessOptionKey(), processName); err != nil {
+			return fmt.Errorf("set pane process %q: %w", processName, err)
+		}
+	}
 
 	payload := buildPayload(command, env)
 	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, shell+" -lc "+shellQuote(payload), "C-m"); err != nil {
@@ -280,7 +291,7 @@ func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, s
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}
@@ -290,17 +301,18 @@ func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneI
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 4 {
 			continue
 		}
 		info := PaneInfo{
-			ID:    parts[0],
-			Title: parts[1],
-			PID:   parts[2],
+			ID:      parts[0],
+			Process: parts[1],
+			Title:   parts[2],
+			PID:     parts[3],
 		}
-		if len(parts) >= 4 {
-			info.Command = parts[3]
+		if len(parts) >= 5 {
+			info.Command = parts[4]
 		}
 		panes = append(panes, info)
 	}

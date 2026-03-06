@@ -15,6 +15,7 @@ wts pick [flags]
 ```
 wts pick
   wts pick --process demo-script
+  wts pick --group dev
   wts pick --attach
 ```
 
@@ -22,6 +23,7 @@ wts pick
 
 ```
       --attach           attach/focus tmux after switching
+      --group string     process group name from config
   -h, --help             help for pick
       --process string   process profile name (default: first process in config)
 ```

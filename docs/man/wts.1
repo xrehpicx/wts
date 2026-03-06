@@ -15,7 +15,7 @@ Worktrees are discovered live from: git worktree list --porcelain.
 
 .PP
 Switching preempts the previously active worktree process and starts the selected
-process in the target worktree.
+process or group in the target worktree.
 
 
 .SH OPTIONS
@@ -32,6 +32,7 @@ process in the target worktree.
 wts validate
   wts list
   wts switch repo-main --process api
+  wts switch repo-main --group dev
   wts next --process demo-script
   wts status --json
   wts tui

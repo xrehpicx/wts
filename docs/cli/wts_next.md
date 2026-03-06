@@ -4,7 +4,7 @@ Switch to next git worktree in list
 
 ### Synopsis
 
-Move to the next discovered worktree and hand off the selected process profile.
+Move to the next discovered worktree and hand off the selected process profile or group.
 
 ```
 wts next [flags]
@@ -15,6 +15,7 @@ wts next [flags]
 ```
 wts next
   wts next --process demo-script
+  wts next --group dev
   wts next --attach
 ```
 
@@ -22,6 +23,7 @@ wts next
 
 ```
       --attach           attach/focus tmux after switching
+      --group string     process group name from config
   -h, --help             help for next
       --process string   process profile name (default: first process in config)
 ```

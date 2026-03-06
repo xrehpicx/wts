@@ -15,19 +15,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/xrehpicx/wts/internal/config"
+	"github.com/xrehpicx/wts/internal/model"
 	"github.com/xrehpicx/wts/internal/runtime"
 	"github.com/xrehpicx/wts/internal/tmux"
 )
 
 type actionDoneMsg struct{ text string }
 type actionErrMsg struct{ err error }
+type groupCreatedMsg struct {
+	project *model.Project
+	target  model.Target
+}
 type statusRefreshedMsg struct {
 	rows []runtime.StatusRow
 	err  error
 }
 type logsMsg struct {
-	dir   string
-	lines []string
+	dir           string
+	linesByTarget map[string][]string
 }
 type tickLogsMsg struct{}
 
@@ -53,72 +59,88 @@ type tuiStyles struct {
 	dimText     lipgloss.Style
 	logText     lipgloss.Style
 	footer      lipgloss.Style
+	modalBorder lipgloss.Style
+	modalFocus  lipgloss.Style
 }
 
+type createGroupFocus int
+
+const (
+	createGroupFocusName createGroupFocus = iota
+	createGroupFocusMembers
+)
+
 type tuiModel struct {
-	rc           *runtimeContext
-	idx          int
-	width        int
-	height       int
-	keys         tuiKeyMap
-	help         help.Model
-	showAll      bool
-	message      string
-	messageIsErr bool
-	rows         []runtime.StatusRow
-	processNames []string
-	processIdx   int
-	styles       tuiStyles
-	spinner      spinner.Model
-	loading      bool
-	loadingDir   string
-	loadingMsg   string
-	quitInfo     string
-	filterMode   bool
-	filterInput  textinput.Model
-	preFilterIdx int
-	logLines     []string
-	logDir       string
+	rc                  *runtimeContext
+	idx                 int
+	width               int
+	height              int
+	keys                tuiKeyMap
+	help                help.Model
+	showAll             bool
+	message             string
+	messageIsErr        bool
+	rows                []runtime.StatusRow
+	targets             []model.Target
+	targetIdx           int
+	styles              tuiStyles
+	spinner             spinner.Model
+	loading             bool
+	loadingDir          string
+	loadingMsg          string
+	quitInfo            string
+	filterMode          bool
+	filterInput         textinput.Model
+	preFilterIdx        int
+	logLines            map[string][]string
+	logDir              string
+	createGroupMode     bool
+	createGroupInput    textinput.Model
+	createGroupFocus    createGroupFocus
+	createGroupCursor   int
+	createGroupSelected map[string]bool
 }
 
 type tuiKeyMap struct {
-	Next     key.Binding
-	Prev     key.Binding
-	Switch   key.Binding
-	Restart  key.Binding
-	Stop     key.Binding
-	StopAll  key.Binding
-	ProcPrev key.Binding
-	ProcNext key.Binding
-	Filter   key.Binding
-	Help     key.Binding
-	Quit     key.Binding
+	Next        key.Binding
+	Prev        key.Binding
+	Switch      key.Binding
+	Restart     key.Binding
+	Stop        key.Binding
+	StopAll     key.Binding
+	ProcPrev    key.Binding
+	ProcNext    key.Binding
+	Filter      key.Binding
+	CreateGroup key.Binding
+	Help        key.Binding
+	Quit        key.Binding
 }
 
 func newTUIKeyMap() tuiKeyMap {
 	return tuiKeyMap{
-		Next:     key.NewBinding(key.WithKeys("n", "j", "down"), key.WithHelp("j/↓", "next")),
-		Prev:     key.NewBinding(key.WithKeys("p", "k", "up"), key.WithHelp("k/↑", "prev")),
-		Switch:   key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/↵", "start/switch")),
-		Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
-		Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop process")),
-		StopAll:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop all")),
-		ProcPrev: key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev process")),
-		ProcNext: key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next process")),
-		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search process")),
-		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Next:        key.NewBinding(key.WithKeys("n", "j", "down"), key.WithHelp("j/↓", "next")),
+		Prev:        key.NewBinding(key.WithKeys("p", "k", "up"), key.WithHelp("k/↑", "prev")),
+		Switch:      key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/↵", "start/switch")),
+		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart target")),
+		Stop:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop target")),
+		StopAll:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop all")),
+		ProcPrev:    key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev target")),
+		ProcNext:    key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next target")),
+		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search target")),
+		CreateGroup: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "new group")),
+		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k tuiKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.ProcPrev, k.ProcNext, k.Filter, k.Help, k.Quit}
+	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit}
 }
 
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll},
-		{k.ProcPrev, k.ProcNext, k.Filter, k.Help, k.Quit},
+		{k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit},
 	}
 }
 
@@ -175,6 +197,14 @@ func newTUIStyles() tuiStyles {
 			Foreground(ac("#374151", "#9CAABB")),
 		footer: lipgloss.NewStyle().
 			Foreground(ac("#4B5563", "#6B7F96")),
+		modalBorder: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ac("#7A8FA8", "#55759A")).
+			Padding(0, 1),
+		modalFocus: lipgloss.NewStyle().
+			Foreground(ac("#0B2239", "#F4F9FF")).
+			Background(ac("#D9EBFF", "#25384E")).
+			Bold(true),
 	}
 }
 
@@ -193,30 +223,34 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 	ti.Prompt = ""
 	ti.CharLimit = 64
 
+	createGroupInput := textinput.New()
+	createGroupInput.Prompt = ""
+	createGroupInput.CharLimit = 64
+
 	m := &tuiModel{
-		rc:          rc,
-		keys:        newTUIKeyMap(),
-		help:        helpModel,
-		styles:      newTUIStyles(),
-		spinner:     s,
-		filterInput: ti,
-		processIdx:  -1,
+		rc:                  rc,
+		keys:                newTUIKeyMap(),
+		help:                helpModel,
+		styles:              newTUIStyles(),
+		spinner:             s,
+		filterInput:         ti,
+		targetIdx:           -1,
+		createGroupInput:    createGroupInput,
+		createGroupSelected: map[string]bool{},
 	}
 
-	// Order processes: active process first, then config order.
-	names := rc.project.ProcessNames()
-	activeProc := rc.manager.ActiveProcess(context.Background())
-	if activeProc != "" {
-		reordered := make([]string, 0, len(names))
-		reordered = append(reordered, activeProc)
-		for _, n := range names {
-			if n != activeProc {
-				reordered = append(reordered, n)
+	targets := rc.project.Targets()
+	if activeTarget, ok := rc.manager.ActiveTarget(context.Background()); ok {
+		reordered := make([]model.Target, 0, len(targets))
+		reordered = append(reordered, activeTarget)
+		for _, target := range targets {
+			if !sameTarget(target, activeTarget) {
+				reordered = append(reordered, target)
 			}
 		}
-		m.processNames = reordered
+		m.targets = reordered
 	} else {
-		m.processNames = names
+		m.targets = targets
 	}
 
 	m.refreshStatus()
@@ -224,7 +258,9 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 		for i := range m.rows {
 			if m.rows[i].Active {
 				m.idx = i
-				m.selectProcessByName(m.rows[i].Process)
+				if activeTarget, ok := rc.manager.ActiveTarget(context.Background()); ok {
+					m.selectTarget(activeTarget)
+				}
 				break
 			}
 		}
@@ -260,6 +296,20 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingMsg = ""
 		m.message = msg.err.Error()
 		m.messageIsErr = true
+	case groupCreatedMsg:
+		m.loading = false
+		m.loadingDir = ""
+		m.loadingMsg = ""
+		m.createGroupMode = false
+		m.createGroupSelected = map[string]bool{}
+		m.createGroupInput.Blur()
+		m.rc.project = msg.project
+		m.rc.manager = runtime.NewManager(msg.project, m.rc.repoRoot, m.rc.worktrees, m.rc.newBackend())
+		m.targets = m.rc.project.Targets()
+		m.selectTarget(msg.target)
+		m.message = "created group " + msg.target.Name
+		m.messageIsErr = false
+		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd())
 	case statusRefreshedMsg:
 		if msg.err != nil {
 			m.message = msg.err.Error()
@@ -287,12 +337,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case logsMsg:
 		cur := m.current()
 		if cur != nil && msg.dir == cur.Dir {
-			m.logLines = msg.lines
+			m.logLines = msg.linesByTarget
 			m.logDir = msg.dir
 		}
 	case tickLogsMsg:
 		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd(), m.scheduleLogRefresh())
 	case tea.KeyMsg:
+		if m.createGroupMode {
+			return m.updateCreateGroupKeys(msg)
+		}
 		if m.filterMode {
 			return m.updateFilterKeys(msg)
 		}
@@ -325,11 +378,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Stop):
 			return m, m.stopCurrentCmd()
 		case key.Matches(msg, m.keys.ProcNext):
-			m.cycleProcess(1)
+			m.cycleTarget(1)
 		case key.Matches(msg, m.keys.ProcPrev):
-			m.cycleProcess(-1)
+			m.cycleTarget(-1)
 		case key.Matches(msg, m.keys.Filter):
 			return m, m.enterFilterMode()
+		case key.Matches(msg, m.keys.CreateGroup):
+			return m, m.enterCreateGroupMode()
 		}
 	}
 
@@ -378,12 +433,12 @@ func (m *tuiModel) renderHeader(width int) string {
 		count := m.countFilterMatches(m.filterInput.Value())
 		botRight = m.styles.subtitle.Render(fmt.Sprintf("%d matching", count)) + " "
 	} else {
-		proc := m.selectedProcess()
+		target, ok := m.selectedTarget()
 		active := m.activeRow()
 		var summary string
-		procLabel := proc
-		if procLabel == "" {
-			procLabel = "no process"
+		targetLabel := "no target"
+		if ok {
+			targetLabel = formatTargetLabel(target)
 		}
 		if active != nil {
 			wt := m.styles.metaValue.Render(active.Worktree)
@@ -399,11 +454,11 @@ func (m *tuiModel) renderHeader(width int) string {
 			} else {
 				dot = m.styles.stopDot.Render(" · ○ stopped")
 			}
-			summary = m.styles.title.Render(procLabel) + m.styles.dimText.Render(" → ") + wt + branch + dot
-		} else if proc == "" {
-			summary = m.styles.dimText.Render("select a process with ←/→")
+			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" → ") + wt + branch + dot
+		} else if !ok {
+			summary = m.styles.dimText.Render("select a process or group with ←/→")
 		} else {
-			summary = m.styles.title.Render(procLabel) + m.styles.dimText.Render(" (idle)")
+			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" (idle)")
 		}
 		botLeft = " " + summary
 
@@ -441,6 +496,9 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 	left := m.renderListPanel(leftWidth, height)
 	right := m.renderDetailPanel(rightWidth, height)
+	if m.createGroupMode {
+		right = m.renderCreateGroupPanel(rightWidth, height)
+	}
 	left = lipgloss.NewStyle().MarginRight(spacer).Render(left)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 }
@@ -497,10 +555,10 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 
 func (m *tuiModel) renderDetailPanel(width, height int) string {
 	maxW := max(12, width-4)
-	proc := m.selectedProcess()
-	panelTitle := proc
-	if panelTitle == "" {
-		panelTitle = "←/→ to select process"
+	target, ok := m.selectedTarget()
+	panelTitle := "←/→ to select process or group"
+	if ok {
+		panelTitle = formatTargetLabel(target)
 	}
 
 	row := m.current()
@@ -544,19 +602,28 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	}
 
 	// Command for selected process
-	var cmdLine string
-	if proc == "" {
-		cmdLine = m.styles.dimText.Render("← / → to select a process")
-	} else if procDef, err := m.rc.project.Process(proc); err != nil {
-		cmdLine = m.styles.statusErr.Render(truncateLine(err.Error(), maxW))
-	} else {
-		cmdLine = m.styles.dimText.Render("▸ ") + m.styles.metaValue.Render(truncateLine(procDef.Command, maxW-2))
+	detailLines := make([]string, 0, 3)
+	switch {
+	case !ok:
+		detailLines = append(detailLines, m.styles.dimText.Render("← / → to select a process or group"))
+	case target.Kind == model.TargetGroup:
+		members := truncateLine(strings.Join(target.ProcessNames, ", "), maxW)
+		detailLines = append(detailLines, m.styles.dimText.Render("members: ")+m.styles.metaValue.Render(members))
+	default:
+		procDef, err := m.rc.project.Process(target.Name)
+		if err != nil {
+			detailLines = append(detailLines, m.styles.statusErr.Render(truncateLine(err.Error(), maxW)))
+		} else {
+			detailLines = append(detailLines, m.styles.dimText.Render("▸ ")+m.styles.metaValue.Render(truncateLine(procDef.Command, maxW-2)))
+		}
 	}
 
 	// Output separator
 	label := " output "
-	if proc != "" {
-		label = " " + proc + " "
+	if ok && target.Kind == model.TargetProcess {
+		label = " " + target.Name + " "
+	} else if ok {
+		label = " " + target.Name + " "
 	}
 	sepW := max(0, maxW-runeLen(label))
 	leftSep := max(0, sepW/5)
@@ -567,12 +634,18 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 
 	// Action hint
 	var hint string
+	targetNoun := "target"
+	if ok && target.Kind == model.TargetGroup {
+		targetNoun = "group"
+	} else if ok {
+		targetNoun = "process"
+	}
 	if row.Running && row.Exited {
-		hint = m.styles.dimText.Render("r restart · x stop · process exited")
+		hint = m.styles.dimText.Render("r restart · x stop · " + targetNoun + " exited")
 	} else if row.Running {
-		hint = m.styles.dimText.Render("s/↵ add process · r restart · x stop")
+		hint = m.styles.dimText.Render("s/↵ add " + targetNoun + " · r restart · x stop")
 	} else {
-		hint = m.styles.dimText.Render("s/↵ start process")
+		hint = m.styles.dimText.Render("s/↵ start " + targetNoun)
 	}
 
 	// Build lines: meta(1) + procs(1) + cmd(1) + sep(1) + [logs...] + hint(1)
@@ -581,18 +654,28 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	if procSummary != "" {
 		lines = append(lines, procSummary)
 	}
-	lines = append(lines, cmdLine, outputSep)
+	lines = append(lines, detailLines...)
+	lines = append(lines, outputSep)
 
 	logSpace := capacity - len(lines) - 1
 	if logSpace > 0 {
 		cur := m.current()
 		if cur != nil && cur.Dir == m.logDir && len(m.logLines) > 0 {
-			start := max(0, len(m.logLines)-logSpace)
-			for _, l := range m.logLines[start:] {
-				lines = append(lines, m.styles.logText.Render(truncateLine(l, maxW)))
+			if ok && target.Kind == model.TargetGroup {
+				lines = append(lines, m.renderGroupLogs(target, logSpace, maxW)...)
+			} else {
+				processName := ""
+				if ok {
+					processName = target.Name
+				}
+				processLogs := m.logLines[processName]
+				start := max(0, len(processLogs)-logSpace)
+				for _, l := range processLogs[start:] {
+					lines = append(lines, m.styles.logText.Render(truncateLine(l, maxW)))
+				}
 			}
 		} else if !row.Running {
-			lines = append(lines, m.styles.dimText.Render("process not running"))
+			lines = append(lines, m.styles.dimText.Render(targetNoun+" not running"))
 		}
 	}
 
@@ -602,6 +685,68 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	lines = append(lines, hint)
 
 	return m.renderPanel(panelTitle, lines, width, height, false)
+}
+
+func (m *tuiModel) renderCreateGroupPanel(width, height int) string {
+	maxW := max(12, width-4)
+	innerHeight := max(1, height-2)
+	capacity := innerHeight - 2
+
+	lines := []string{
+		m.styles.dimText.Render("Create a group in " + filepath.Base(m.rc.project.ConfigPath)),
+		"",
+		m.styles.dimText.Render("name"),
+		m.renderCreateGroupNameLine(maxW),
+		"",
+		m.styles.dimText.Render("members"),
+	}
+
+	processNames := m.rc.project.ProcessNames()
+	if len(processNames) == 0 {
+		lines = append(lines, m.styles.statusErr.Render("No processes available"))
+	} else {
+		for i, name := range processNames {
+			cursor := "  "
+			if m.createGroupFocus == createGroupFocusMembers && i == m.createGroupCursor {
+				cursor = "▸ "
+			}
+			box := "[ ]"
+			if m.createGroupSelected[name] {
+				box = "[x]"
+			}
+			line := cursor + box + " " + name
+			if m.createGroupFocus == createGroupFocusMembers && i == m.createGroupCursor {
+				line = m.styles.modalFocus.Render(truncateLine(line, maxW))
+			} else {
+				line = m.styles.row.Render(truncateLine(line, maxW))
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, m.styles.dimText.Render("tab switch focus · space toggle member · enter save · esc cancel"))
+
+	if len(lines) > capacity {
+		lines = lines[:capacity]
+	}
+	for len(lines) < capacity {
+		lines = append(lines, "")
+	}
+
+	return m.styles.modalBorder.Width(width).Render(strings.Join(append([]string{m.styles.panelTitle.Render("Create Group"), ""}, lines...), "\n"))
+}
+
+func (m *tuiModel) renderCreateGroupNameLine(maxW int) string {
+	line := m.createGroupInput.View()
+	if strings.TrimSpace(line) == "" {
+		line = m.styles.dimText.Render("group name")
+	}
+	line = truncateLine(line, maxW)
+	if m.createGroupFocus == createGroupFocusName {
+		return m.styles.modalFocus.Render(line)
+	}
+	return m.styles.row.Render(line)
 }
 
 func (m *tuiModel) renderPanel(title string, lines []string, width, height int, focused bool) string {
@@ -670,43 +815,219 @@ func (m *tuiModel) activeRow() *runtime.StatusRow {
 	return nil
 }
 
-func (m *tuiModel) selectedProcess() string {
-	if len(m.processNames) == 0 || m.processIdx < 0 || m.processIdx >= len(m.processNames) {
-		return ""
+func (m *tuiModel) selectedTarget() (model.Target, bool) {
+	if len(m.targets) == 0 || m.targetIdx < 0 || m.targetIdx >= len(m.targets) {
+		return model.Target{}, false
 	}
-	return m.processNames[m.processIdx]
+	return m.targets[m.targetIdx], true
 }
 
-func (m *tuiModel) selectProcessByName(name string) {
-	for i := range m.processNames {
-		if m.processNames[i] == name {
-			m.processIdx = i
+func (m *tuiModel) selectTarget(target model.Target) {
+	for i := range m.targets {
+		if sameTarget(m.targets[i], target) {
+			m.targetIdx = i
 			return
 		}
 	}
 }
 
-func (m *tuiModel) cycleProcess(delta int) {
-	if len(m.processNames) == 0 {
-		m.message = "no processes configured — add processes to .wts.yaml"
+func (m *tuiModel) cycleTarget(delta int) {
+	if len(m.targets) == 0 {
+		m.message = "no targets configured — add processes or groups to .wts.yaml"
 		m.messageIsErr = true
 		return
 	}
-	if m.processIdx < 0 {
-		// First selection: go to first process regardless of delta direction.
-		m.processIdx = 0
+	if m.targetIdx < 0 {
+		m.targetIdx = 0
 	} else {
-		m.processIdx = (m.processIdx + delta + len(m.processNames)) % len(m.processNames)
+		m.targetIdx = (m.targetIdx + delta + len(m.targets)) % len(m.targets)
 	}
-	m.message = "process: " + m.selectedProcess()
+	target, _ := m.selectedTarget()
+	m.message = "target: " + formatTargetLabel(target)
 	m.messageIsErr = false
+}
+
+func (m *tuiModel) renderGroupLogs(target model.Target, logSpace, maxW int) []string {
+	if len(target.ProcessNames) == 0 || logSpace <= 0 {
+		return nil
+	}
+
+	sectionCount := len(target.ProcessNames)
+	headerSpace := sectionCount
+	lineBudget := max(0, logSpace-headerSpace)
+	linesPerProcess := 1
+	if sectionCount > 0 {
+		linesPerProcess = max(1, lineBudget/sectionCount)
+	}
+
+	lines := make([]string, 0, logSpace)
+	for _, processName := range target.ProcessNames {
+		if len(lines) >= logSpace {
+			break
+		}
+		lines = append(lines, m.styles.dimText.Render("["+processName+"]"))
+		processLogs := m.logLines[processName]
+		if len(processLogs) == 0 {
+			if len(lines) < logSpace {
+				lines = append(lines, m.styles.dimText.Render("waiting for logs..."))
+			}
+			continue
+		}
+		start := max(0, len(processLogs)-linesPerProcess)
+		for _, line := range processLogs[start:] {
+			if len(lines) >= logSpace {
+				break
+			}
+			lines = append(lines, m.styles.logText.Render(truncateLine(line, maxW)))
+		}
+	}
+	return lines
+}
+
+func sameTarget(left, right model.Target) bool {
+	return left.Kind == right.Kind && left.Name == right.Name
+}
+
+func formatTargetLabel(target model.Target) string {
+	if target.Kind == model.TargetGroup {
+		return "[group] " + target.Name
+	}
+	return target.Name
+}
+
+func runOptionsForTarget(target model.Target) runtime.RunOptions {
+	opts := runtime.RunOptions{}
+	if target.Kind == model.TargetGroup {
+		opts.Group = target.Name
+		return opts
+	}
+	opts.Process = target.Name
+	return opts
+}
+
+// --- Group editor ---
+
+func (m *tuiModel) enterCreateGroupMode() tea.Cmd {
+	m.createGroupMode = true
+	m.createGroupFocus = createGroupFocusName
+	m.createGroupCursor = 0
+	m.createGroupSelected = make(map[string]bool, len(m.rc.project.Processes))
+	m.createGroupInput.SetValue("")
+
+	if target, ok := m.selectedTarget(); ok {
+		for _, name := range target.ProcessNames {
+			m.createGroupSelected[name] = true
+		}
+	}
+
+	m.message = ""
+	m.messageIsErr = false
+	return m.createGroupInput.Focus()
+}
+
+func (m *tuiModel) updateCreateGroupKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.createGroupMode = false
+		m.createGroupSelected = map[string]bool{}
+		m.createGroupInput.Blur()
+		return m, nil
+	case tea.KeyTab:
+		if m.createGroupFocus == createGroupFocusName {
+			m.createGroupFocus = createGroupFocusMembers
+			m.createGroupInput.Blur()
+			return m, nil
+		}
+		m.createGroupFocus = createGroupFocusName
+		return m, m.createGroupInput.Focus()
+	case tea.KeyEnter:
+		return m, m.saveCreateGroupCmd()
+	}
+
+	if m.createGroupFocus == createGroupFocusMembers {
+		switch msg.Type {
+		case tea.KeyUp:
+			if len(m.rc.project.Processes) > 0 {
+				m.createGroupCursor = (m.createGroupCursor - 1 + len(m.rc.project.Processes)) % len(m.rc.project.Processes)
+			}
+			return m, nil
+		case tea.KeyDown:
+			if len(m.rc.project.Processes) > 0 {
+				m.createGroupCursor = (m.createGroupCursor + 1) % len(m.rc.project.Processes)
+			}
+			return m, nil
+		case tea.KeySpace:
+			processNames := m.rc.project.ProcessNames()
+			if len(processNames) == 0 {
+				return m, nil
+			}
+			name := processNames[m.createGroupCursor]
+			if m.createGroupSelected[name] {
+				delete(m.createGroupSelected, name)
+			} else {
+				m.createGroupSelected[name] = true
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.createGroupInput, cmd = m.createGroupInput.Update(msg)
+	return m, cmd
+}
+
+func (m *tuiModel) selectedCreateGroupMembers() []string {
+	members := make([]string, 0, len(m.createGroupSelected))
+	for _, name := range m.rc.project.ProcessNames() {
+		if m.createGroupSelected[name] {
+			members = append(members, name)
+		}
+	}
+	return members
+}
+
+func (m *tuiModel) saveCreateGroupCmd() tea.Cmd {
+	name := strings.TrimSpace(m.createGroupInput.Value())
+	members := m.selectedCreateGroupMembers()
+	if name == "" {
+		m.message = "group name is required"
+		m.messageIsErr = true
+		return nil
+	}
+	if len(members) == 0 {
+		m.message = "select at least one process for the group"
+		m.messageIsErr = true
+		return nil
+	}
+
+	cfg := m.rc.project.Config()
+	cfg.Groups = append(cfg.Groups, model.ProcessGroup{
+		Name:      name,
+		Processes: append([]string(nil), members...),
+	})
+
+	m.loading = true
+	m.loadingMsg = "saving group " + name + "..."
+
+	return func() tea.Msg {
+		project, err := config.Save(m.rc.project.ConfigPath, cfg)
+		if err != nil {
+			return actionErrMsg{err: err}
+		}
+		target, err := project.ResolveTarget("", name)
+		if err != nil {
+			return actionErrMsg{err: err}
+		}
+		return groupCreatedMsg{project: project, target: target}
+	}
 }
 
 // --- Process filter ---
 
 func (m *tuiModel) enterFilterMode() tea.Cmd {
 	m.filterMode = true
-	m.preFilterIdx = m.processIdx
+	m.preFilterIdx = m.targetIdx
 	m.filterInput.SetValue("")
 	return m.filterInput.Focus()
 }
@@ -716,13 +1037,18 @@ func (m *tuiModel) updateFilterKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.filterMode = false
 		m.filterInput.Blur()
-		m.message = "process: " + m.selectedProcess()
+		target, ok := m.selectedTarget()
+		if ok {
+			m.message = "target: " + formatTargetLabel(target)
+		} else {
+			m.message = ""
+		}
 		m.messageIsErr = false
 		return m, nil
 	case tea.KeyEscape:
 		m.filterMode = false
 		m.filterInput.Blur()
-		m.processIdx = m.preFilterIdx
+		m.targetIdx = m.preFilterIdx
 		return m, nil
 	}
 
@@ -737,9 +1063,9 @@ func (m *tuiModel) filterProcesses(query string) {
 		return
 	}
 	q := strings.ToLower(query)
-	for i, name := range m.processNames {
-		if strings.Contains(strings.ToLower(name), q) {
-			m.processIdx = i
+	for i, target := range m.targets {
+		if strings.Contains(strings.ToLower(formatTargetLabel(target)), q) {
+			m.targetIdx = i
 			return
 		}
 	}
@@ -747,12 +1073,12 @@ func (m *tuiModel) filterProcesses(query string) {
 
 func (m *tuiModel) countFilterMatches(query string) int {
 	if query == "" {
-		return len(m.processNames)
+		return len(m.targets)
 	}
 	q := strings.ToLower(query)
 	count := 0
-	for _, name := range m.processNames {
-		if strings.Contains(strings.ToLower(name), q) {
+	for _, target := range m.targets {
+		if strings.Contains(strings.ToLower(formatTargetLabel(target)), q) {
 			count++
 		}
 	}
@@ -766,9 +1092,9 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	proc := m.selectedProcess()
-	if proc == "" {
-		m.message = "select a process first with ←/→"
+	target, ok := m.selectedTarget()
+	if !ok {
+		m.message = "select a process or group first with ←/→"
 		m.messageIsErr = true
 		return nil
 	}
@@ -780,25 +1106,26 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 	// Otherwise use Switch (preemptive: stops the other active worktree).
 	useAdditive := row.Running && !row.Exited
 	if useAdditive {
-		m.loadingMsg = "starting " + proc + " in " + name + "..."
+		m.loadingMsg = "starting " + formatTargetLabel(target) + " in " + name + "..."
 	} else {
-		m.loadingMsg = "switching to " + name + "..."
+		m.loadingMsg = "switching " + formatTargetLabel(target) + " to " + name + "..."
 	}
 
 	action := func() tea.Msg {
+		opts := runOptionsForTarget(target)
 		var err error
 		if useAdditive {
-			err = m.rc.manager.Start(context.Background(), dir, runtime.RunOptions{Process: proc})
+			err = m.rc.manager.Start(context.Background(), dir, opts)
 		} else {
-			err = m.rc.manager.Switch(context.Background(), dir, runtime.RunOptions{Process: proc})
+			err = m.rc.manager.Switch(context.Background(), dir, opts)
 		}
 		if err != nil {
 			return actionErrMsg{err: err}
 		}
 		if useAdditive {
-			return actionDoneMsg{text: "started " + proc + " in " + name}
+			return actionDoneMsg{text: "started " + formatTargetLabel(target) + " in " + name}
 		}
-		return actionDoneMsg{text: "switched to " + name}
+		return actionDoneMsg{text: "switched " + formatTargetLabel(target) + " to " + name}
 	}
 	return tea.Batch(m.spinner.Tick, action)
 }
@@ -808,21 +1135,21 @@ func (m *tuiModel) restartCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	proc := m.selectedProcess()
-	if proc == "" {
-		m.message = "select a process first with ←/→"
+	target, ok := m.selectedTarget()
+	if !ok {
+		m.message = "select a process or group first with ←/→"
 		m.messageIsErr = true
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
-	m.loadingMsg = "restarting " + name + "..."
+	m.loadingMsg = "restarting " + formatTargetLabel(target) + " in " + name + "..."
 	action := func() tea.Msg {
-		if err := m.rc.manager.Restart(context.Background(), dir, runtime.RunOptions{Process: proc}); err != nil {
+		if err := m.rc.manager.Restart(context.Background(), dir, runOptionsForTarget(target)); err != nil {
 			return actionErrMsg{err: err}
 		}
-		return actionDoneMsg{text: "restarted " + name}
+		return actionDoneMsg{text: "restarted " + formatTargetLabel(target) + " in " + name}
 	}
 	return tea.Batch(m.spinner.Tick, action)
 }
@@ -832,21 +1159,27 @@ func (m *tuiModel) stopCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	proc := m.selectedProcess()
-	if proc == "" {
-		m.message = "select a process first with ←/→"
+	target, ok := m.selectedTarget()
+	if !ok {
+		m.message = "select a process or group first with ←/→"
 		m.messageIsErr = true
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
 	m.loading = true
 	m.loadingDir = dir
-	m.loadingMsg = "stopping " + proc + " in " + name + "..."
+	m.loadingMsg = "stopping " + formatTargetLabel(target) + " in " + name + "..."
 	action := func() tea.Msg {
-		if err := m.rc.manager.StopProcess(context.Background(), dir, proc); err != nil {
+		var err error
+		if target.Kind == model.TargetGroup {
+			err = m.rc.manager.StopGroup(context.Background(), dir, target.Name)
+		} else {
+			err = m.rc.manager.StopProcess(context.Background(), dir, target.Name)
+		}
+		if err != nil {
 			return actionErrMsg{err: err}
 		}
-		return actionDoneMsg{text: "stopped " + proc + " in " + name}
+		return actionDoneMsg{text: "stopped " + formatTargetLabel(target) + " in " + name}
 	}
 	return tea.Batch(m.spinner.Tick, action)
 }
@@ -877,17 +1210,38 @@ func (m *tuiModel) fetchLogsCmd() tea.Cmd {
 		return nil
 	}
 	dir := row.Dir
-	proc := m.selectedProcess()
+	target, ok := m.selectedTarget()
 	return func() tea.Msg {
-		output, err := m.rc.manager.Logs(context.Background(), dir, proc, 200)
+		linesByTarget := map[string][]string{}
+		if ok && target.Kind == model.TargetGroup {
+			for _, processName := range target.ProcessNames {
+				output, err := m.rc.manager.Logs(context.Background(), dir, processName, 80)
+				if err != nil {
+					continue
+				}
+				raw := strings.TrimRight(output, "\n")
+				if raw == "" {
+					continue
+				}
+				linesByTarget[processName] = strings.Split(raw, "\n")
+			}
+			return logsMsg{dir: dir, linesByTarget: linesByTarget}
+		}
+
+		processName := ""
+		if ok {
+			processName = target.Name
+		}
+		output, err := m.rc.manager.Logs(context.Background(), dir, processName, 200)
 		if err != nil {
-			return logsMsg{dir: dir}
+			return logsMsg{dir: dir, linesByTarget: linesByTarget}
 		}
 		raw := strings.TrimRight(output, "\n")
 		if raw == "" {
-			return logsMsg{dir: dir}
+			return logsMsg{dir: dir, linesByTarget: linesByTarget}
 		}
-		return logsMsg{dir: dir, lines: strings.Split(raw, "\n")}
+		linesByTarget[processName] = strings.Split(raw, "\n")
+		return logsMsg{dir: dir, linesByTarget: linesByTarget}
 	}
 }
 

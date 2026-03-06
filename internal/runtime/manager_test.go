@@ -70,8 +70,9 @@ func (m *mockBackend) Attach(context.Context, string, string) error { return nil
 func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) error {
 	if len(m.panes[window]) > 0 {
 		m.panes[window][len(m.panes[window])-1].Title = title
+		m.panes[window][len(m.panes[window])-1].Process = tmux.ProcessFromPaneTitle(title)
 	} else {
-		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Title: title, PID: "1000", Command: "node"}}
+		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Process: tmux.ProcessFromPaneTitle(title), Title: title, PID: "1000", Command: "node"}}
 	}
 	return nil
 }
@@ -79,8 +80,9 @@ func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ s
 	id := len(m.panes[window])
 	m.panes[window] = append(m.panes[window], tmux.PaneInfo{
 		ID:      "%" + string(rune('0'+id)),
+		Process: tmux.ProcessFromPaneTitle(paneTitle),
 		Title:   paneTitle,
-		PID:     "1001",
+		PID:     "100" + string(rune('0'+id)),
 		Command: "node",
 	})
 	m.startCount[window]++
@@ -121,6 +123,9 @@ func testProject() *model.Project {
 		Processes: []model.Process{
 			{Name: "api", Command: "go run .", Env: map[string]string{}},
 			{Name: "web", Command: "pnpm dev", Env: map[string]string{}},
+		},
+		Groups: []model.ProcessGroup{
+			{Name: "dev", Processes: []string{"api", "web"}},
 		},
 	}
 	return model.NewProject("/tmp/.wts.yaml", "/tmp", cfg)
@@ -187,6 +192,12 @@ func TestSwitchUsesRequestedProcess(t *testing.T) {
 	if backend.options[tmux.ActiveProcessOptionKey()] != "web" {
 		t.Fatalf("unexpected active process: %q", backend.options[tmux.ActiveProcessOptionKey()])
 	}
+	if backend.options[tmux.ActiveTargetKindOptionKey()] != string(model.TargetProcess) {
+		t.Fatalf("unexpected active target kind: %q", backend.options[tmux.ActiveTargetKindOptionKey()])
+	}
+	if backend.options[tmux.ActiveTargetNameOptionKey()] != "web" {
+		t.Fatalf("unexpected active target name: %q", backend.options[tmux.ActiveTargetNameOptionKey()])
+	}
 }
 
 func TestStartIsAdditive(t *testing.T) {
@@ -217,6 +228,29 @@ func TestStartIsAdditive(t *testing.T) {
 	}
 }
 
+func TestStartGroupStartsAllProcesses(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	panes := backend.panes[window]
+	if len(panes) != 2 {
+		t.Fatalf("expected 2 panes for group, got %d", len(panes))
+	}
+	if backend.options[tmux.ActiveTargetKindOptionKey()] != string(model.TargetGroup) {
+		t.Fatalf("unexpected active target kind: %q", backend.options[tmux.ActiveTargetKindOptionKey()])
+	}
+	if backend.options[tmux.ActiveTargetNameOptionKey()] != "dev" {
+		t.Fatalf("unexpected active target name: %q", backend.options[tmux.ActiveTargetNameOptionKey()])
+	}
+}
+
 func TestStopProcessStopsOnlyOnePane(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
@@ -243,6 +277,28 @@ func TestStopProcessStopsOnlyOnePane(t *testing.T) {
 	}
 }
 
+func TestStopGroupStopsAllGroupPanes(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+	if err := manager.StopGroup(ctx, "repo-main", "dev"); err != nil {
+		t.Fatalf("stop group: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	if backend.windows[window] {
+		t.Fatalf("expected worktree window stopped after stopping entire group")
+	}
+	if backend.options[tmux.ActiveTargetNameOptionKey()] != "" {
+		t.Fatalf("expected active target cleared")
+	}
+}
+
 func TestStopActiveClearsActiveOptions(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()
@@ -260,6 +316,12 @@ func TestStopActiveClearsActiveOptions(t *testing.T) {
 	}
 	if backend.options[tmux.ActiveProcessOptionKey()] != "" {
 		t.Fatalf("expected active process cleared")
+	}
+	if backend.options[tmux.ActiveTargetKindOptionKey()] != "" {
+		t.Fatalf("expected active target kind cleared")
+	}
+	if backend.options[tmux.ActiveTargetNameOptionKey()] != "" {
+		t.Fatalf("expected active target name cleared")
 	}
 }
 
@@ -347,6 +409,38 @@ func TestRestartStopsAndRestartsProcess(t *testing.T) {
 	}
 	if !names["web"] {
 		t.Fatalf("expected web pane preserved after restart")
+	}
+}
+
+func TestRestartGroupStopsAndRestartsEachProcess(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	if len(backend.panes[window]) != 2 {
+		t.Fatalf("expected 2 panes before group restart, got %d", len(backend.panes[window]))
+	}
+
+	if err := manager.Restart(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("restart group: %v", err)
+	}
+
+	panes := backend.panes[window]
+	if len(panes) != 2 {
+		t.Fatalf("expected 2 panes after group restart, got %d", len(panes))
+	}
+	names := map[string]bool{}
+	for _, pane := range panes {
+		names[tmux.ProcessFromPaneTitle(pane.Title)] = true
+	}
+	if !names["api"] || !names["web"] {
+		t.Fatalf("expected both group members after restart, got %#v", names)
 	}
 }
 
@@ -642,6 +736,36 @@ func TestStatusKeepsRunningWhenShellCommandButChildStillAlive(t *testing.T) {
 	}
 	if rows[0].Exited {
 		t.Fatalf("expected exited=false while pane child process is still alive")
+	}
+}
+
+func TestStatusUsesPaneProcessMetadataWhenTitleChanges(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.panes[window][0].Title = "~/p/wps"
+	backend.panes[window][1].Title = "/bin/sh -lc demo"
+
+	rows, err := manager.Status(ctx, "repo-main")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].Processes) != 2 {
+		t.Fatalf("unexpected rows: %#v", rows)
+	}
+	names := map[string]bool{}
+	for _, proc := range rows[0].Processes {
+		names[proc.Name] = true
+	}
+	if !names["api"] || !names["web"] {
+		t.Fatalf("expected pane metadata names preserved, got %#v", names)
 	}
 }
 

@@ -21,6 +21,10 @@ Capture recent output lines from the tmux window for a running worktree process.
 \fB--lines\fP=200
 	number of log lines
 
+.PP
+\fB--process\fP=""
+	process name (default: first pane)
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--config\fP=""
@@ -30,6 +34,7 @@ Capture recent output lines from the tmux window for a running worktree process.
 .SH EXAMPLE
 .EX
 wts logs repo-main
+  wts logs repo-main --process api
   wts logs ../repo-agent --lines 400
 .EE
 

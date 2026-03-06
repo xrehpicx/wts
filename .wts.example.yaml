@@ -9,3 +9,8 @@ processes:
     command: "pnpm dev"
   - name: demo-script
     command: "./scripts/example-longrun.sh demo-script 3"
+groups:
+  - name: dev
+    processes:
+      - api
+      - web

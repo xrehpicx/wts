@@ -10,12 +10,16 @@ wts-next - Switch to next git worktree in list
 
 
 .SH DESCRIPTION
-Move to the next discovered worktree and hand off the selected process profile.
+Move to the next discovered worktree and hand off the selected process profile or group.
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
 	attach/focus tmux after switching
+
+.PP
+\fB--group\fP=""
+	process group name from config
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -35,6 +39,7 @@ Move to the next discovered worktree and hand off the selected process profile.
 .EX
 wts next
   wts next --process demo-script
+  wts next --group dev
   wts next --attach
 .EE
 

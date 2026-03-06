@@ -2,7 +2,7 @@
 .TH "WORKSWITCH" "1" "Mar 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
-wts-switch - Switch to a worktree and hand off process
+wts-switch - Switch to a worktree and hand off a target
 
 
 .SH SYNOPSIS
@@ -10,16 +10,25 @@ wts-switch - Switch to a worktree and hand off process
 
 
 .SH DESCRIPTION
-Start or move a process profile to a target worktree.
+Start or move a process profile or process group to a target worktree.
 
 .PP
-The currently active worktree process is stopped first, then the target process
-is started in the selected worktree directory.
+\&'switch' preempts: stops the previously active worktree, then starts the target.
+\&'start' is additive: starts the target alongside any already running processes.
+\&'restart' stops and re-starts the selected process or group.
+
+.PP
+Process groups are configured in .wts.yaml and each member process still runs in
+its own tmux pane.
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
 	attach/focus tmux after command
+
+.PP
+\fB--group\fP=""
+	process group name from config
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -39,6 +48,7 @@ is started in the selected worktree directory.
 .EX
 wts switch repo-main
   wts switch ../repo-agent --process demo-script
+  wts switch ../repo-agent --group dev
   wts switch /abs/path/to/worktree --attach
 .EE
 

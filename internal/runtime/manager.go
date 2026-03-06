@@ -44,6 +44,7 @@ type Manager struct {
 type RunOptions struct {
 	Attach  bool
 	Process string
+	Group   string
 }
 
 type ProcessStatus struct {
@@ -84,6 +85,41 @@ func (m *Manager) ActiveProcess(ctx context.Context) string {
 	return name
 }
 
+func (m *Manager) ActiveTarget(ctx context.Context) (model.Target, bool) {
+	kind, _ := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey())
+	name, _ := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey())
+	switch model.TargetKind(kind) {
+	case model.TargetGroup:
+		if name == "" {
+			return model.Target{}, false
+		}
+		target, err := m.project.ResolveTarget("", name)
+		if err != nil {
+			return model.Target{}, false
+		}
+		return target, true
+	case model.TargetProcess:
+		if name == "" {
+			return model.Target{}, false
+		}
+		target, err := m.project.ResolveTarget(name, "")
+		if err != nil {
+			return model.Target{}, false
+		}
+		return target, true
+	}
+
+	activeProc := m.ActiveProcess(ctx)
+	if activeProc == "" {
+		return model.Target{}, false
+	}
+	target, err := m.project.ResolveTarget(activeProc, "")
+	if err != nil {
+		return model.Target{}, false
+	}
+	return target, true
+}
+
 func (m *Manager) ListWorktrees() []gitwt.Worktree {
 	items := make([]gitwt.Worktree, len(m.worktrees))
 	copy(items, m.worktrees)
@@ -117,7 +153,7 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 	if err != nil {
 		return err
 	}
-	proc, err := m.resolveProcess(opts.Process)
+	target, err := m.resolveTarget(opts)
 	if err != nil {
 		return err
 	}
@@ -143,30 +179,40 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		return err
 	}
 
-	paneTitle := tmux.ProcessPaneTitle(proc.Name)
+	for _, processName := range target.ProcessNames {
+		proc, err := m.project.Process(processName)
+		if err != nil {
+			return err
+		}
+		paneTitle := tmux.ProcessPaneTitle(proc.Name)
 
-	if windowExists {
-		// Check if this specific process is already running as a pane.
-		pane := m.findProcessPane(ctx, wt, proc.Name)
+		if windowExists {
+			pane := m.findProcessPane(ctx, wt, proc.Name)
 
-		if forceRestart && pane != nil {
-			timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-			if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
-				return fmt.Errorf("stop process %q in %q: %w", proc.Name, wt.Name, err)
+			if forceRestart && pane != nil {
+				timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
+				if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
+					return fmt.Errorf("stop process %q in %q: %w", proc.Name, wt.Name, err)
+				}
+				windowExists, err = m.backend.HasWindow(ctx, m.session, windowName)
+				if err != nil {
+					return err
+				}
+				pane = nil
 			}
-			pane = nil
+
+			if pane == nil {
+				if err := m.backend.SplitWindowCommand(
+					ctx, m.session, windowName,
+					wt.Dir, m.project.Defaults.Shell,
+					proc.Command, proc.Env, paneTitle,
+				); err != nil {
+					return fmt.Errorf("add process %q to %q: %w", proc.Name, wt.Name, err)
+				}
+			}
+			continue
 		}
 
-		if pane == nil {
-			if err := m.backend.SplitWindowCommand(
-				ctx, m.session, windowName,
-				wt.Dir, m.project.Defaults.Shell,
-				proc.Command, proc.Env, paneTitle,
-			); err != nil {
-				return fmt.Errorf("add process %q to %q: %w", proc.Name, wt.Name, err)
-			}
-		}
-	} else {
 		if err := m.backend.StartWindowCommand(
 			ctx, m.session, windowName,
 			wt.Dir, m.project.Defaults.Shell,
@@ -177,12 +223,19 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		if err := m.backend.SetPaneTitle(ctx, m.session, windowName, paneTitle); err != nil {
 			return fmt.Errorf("set pane title in %q: %w", wt.Name, err)
 		}
+		windowExists = true
 	}
 
 	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), wt.Dir); err != nil {
 		return err
 	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), proc.Name); err != nil {
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), target.ProcessNames[0]); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), string(target.Kind)); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), target.Name); err != nil {
 		return err
 	}
 
@@ -238,6 +291,12 @@ func (m *Manager) StopWorktree(ctx context.Context, worktree string) error {
 		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
 			return err
 		}
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), ""); err != nil {
+			return err
+		}
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), ""); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -260,7 +319,38 @@ func (m *Manager) StopProcess(ctx context.Context, worktree, processName string)
 	if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
 		return err
 	}
-	return m.syncActiveStateAfterStopProcess(ctx, wt, processName)
+	return m.syncActiveStateAfterStopTargets(ctx, wt, []string{processName})
+}
+
+func (m *Manager) StopGroup(ctx context.Context, worktree, groupName string) error {
+	wt, err := m.resolveWorktree(worktree)
+	if err != nil {
+		return err
+	}
+	if err := m.ensureReady(ctx); err != nil {
+		return err
+	}
+	group, err := m.project.Group(groupName)
+	if err != nil {
+		return err
+	}
+
+	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
+	stoppedAny := false
+	for _, processName := range group.Processes {
+		pane := m.findProcessPane(ctx, wt, processName)
+		if pane == nil {
+			continue
+		}
+		if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
+			return err
+		}
+		stoppedAny = true
+	}
+	if !stoppedAny {
+		return fmt.Errorf("group %q not running in worktree %q", group.Name, wt.Name)
+	}
+	return m.syncActiveStateAfterStopTargets(ctx, wt, group.Processes)
 }
 
 func (m *Manager) StopActive(ctx context.Context) error {
@@ -286,6 +376,12 @@ func (m *Manager) StopActive(ctx context.Context) error {
 	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
 		return err
 	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), ""); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), ""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -303,6 +399,12 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		return err
 	}
 	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), ""); err != nil {
+		return err
+	}
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), ""); err != nil {
 		return err
 	}
 	return nil
@@ -359,6 +461,7 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 	if err != nil {
 		return nil, err
 	}
+	activeTarget, hasActiveTarget := m.ActiveTarget(ctx)
 
 	rows := make([]StatusRow, 0, len(m.worktrees))
 	for i := range m.worktrees {
@@ -382,8 +485,18 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 		if windowExists {
 			panes, err := m.backend.ListPanes(ctx, m.session, windowName)
 			if err == nil && len(panes) > 0 {
+				groupMatchCount := map[string]int{}
 				for _, pane := range panes {
-					procName := tmux.ProcessFromPaneTitle(pane.Title)
+					resolvedFromPane := false
+					procName := strings.TrimSpace(pane.Process)
+					if procName == "" {
+						procName = tmux.ProcessFromPaneTitle(pane.Title)
+					} else {
+						resolvedFromPane = true
+					}
+					if procName != "" && !resolvedFromPane {
+						resolvedFromPane = true
+					}
 					if procName == "" {
 						// Legacy pane without wts title — use active process as fallback.
 						if active && activeProc != "" {
@@ -391,6 +504,14 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 						} else {
 							procName = primaryProcess
 						}
+					}
+					if active && hasActiveTarget && activeTarget.Kind == model.TargetGroup {
+						if !resolvedFromPane || groupMatchCount[procName] > 0 {
+							if inferred := nextUnmatchedProcess(activeTarget.ProcessNames, groupMatchCount); inferred != "" {
+								procName = inferred
+							}
+						}
+						groupMatchCount[procName]++
 					}
 					exited := false
 					if pane.PID != "" {
@@ -488,15 +609,8 @@ func (m *Manager) resolveWorktree(selector string) (*gitwt.Worktree, error) {
 	return gitwt.Resolve(m.worktrees, selector)
 }
 
-func (m *Manager) resolveProcess(name string) (*model.Process, error) {
-	processName := name
-	if processName == "" {
-		processName = m.defaultProcessName()
-	}
-	if processName == "" {
-		return nil, fmt.Errorf("no process profiles configured")
-	}
-	return m.project.Process(processName)
+func (m *Manager) resolveTarget(opts RunOptions) (model.Target, error) {
+	return m.project.ResolveTarget(opts.Process, opts.Group)
 }
 
 func (m *Manager) stopWorktreeProcess(ctx context.Context, wt *gitwt.Worktree) error {
@@ -515,7 +629,7 @@ func (m *Manager) isRunning(ctx context.Context, wt *gitwt.Worktree) (bool, erro
 	return m.backend.HasWindow(ctx, m.session, tmux.WindowName(wt.Dir))
 }
 
-func (m *Manager) syncActiveStateAfterStopProcess(ctx context.Context, wt *gitwt.Worktree, stoppedProcess string) error {
+func (m *Manager) syncActiveStateAfterStopTargets(ctx context.Context, wt *gitwt.Worktree, stoppedProcesses []string) error {
 	activeDir, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
 	if err != nil {
 		return err
@@ -533,25 +647,75 @@ func (m *Manager) syncActiveStateAfterStopProcess(ctx context.Context, wt *gitwt
 		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), ""); err != nil {
 			return err
 		}
-		return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), "")
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), ""); err != nil {
+			return err
+		}
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), ""); err != nil {
+			return err
+		}
+		return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), "")
 	}
 
 	activeProc, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
 	if err != nil {
 		return err
 	}
-	if activeProc != stoppedProcess {
-		return nil
-	}
 
 	panes, err := m.backend.ListPanes(ctx, m.session, windowName)
 	if err != nil {
 		return err
 	}
+
+	nextActiveProc := ""
 	for _, pane := range panes {
 		if name := tmux.ProcessFromPaneTitle(pane.Title); name != "" {
-			return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), name)
+			nextActiveProc = name
+			break
 		}
 	}
-	return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), "")
+	if stringInSlice(activeProc, stoppedProcesses) {
+		if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), nextActiveProc); err != nil {
+			return err
+		}
+	}
+
+	target, ok := m.ActiveTarget(ctx)
+	if !ok {
+		return nil
+	}
+	if !targetsOverlap(target.ProcessNames, stoppedProcesses) {
+		return nil
+	}
+
+	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), ""); err != nil {
+		return err
+	}
+	return m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), "")
+}
+
+func stringInSlice(value string, items []string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func targetsOverlap(left, right []string) bool {
+	for _, item := range left {
+		if stringInSlice(item, right) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextUnmatchedProcess(processNames []string, seen map[string]int) string {
+	for _, name := range processNames {
+		if seen[name] == 0 {
+			return name
+		}
+	}
+	return ""
 }

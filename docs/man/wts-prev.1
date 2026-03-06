@@ -10,12 +10,16 @@ wts-prev - Switch to previous git worktree in list
 
 
 .SH DESCRIPTION
-Move to the previous discovered worktree and hand off the selected process profile.
+Move to the previous discovered worktree and hand off the selected process profile or group.
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
 	attach/focus tmux after switching
+
+.PP
+\fB--group\fP=""
+	process group name from config
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]
@@ -35,6 +39,7 @@ Move to the previous discovered worktree and hand off the selected process profi
 .EX
 wts prev
   wts prev --process api
+  wts prev --group dev
   wts prev --attach
 .EE
 
