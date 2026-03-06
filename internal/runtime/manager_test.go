@@ -183,6 +183,29 @@ func TestSwitchPreemptsPreviousWorktree(t *testing.T) {
 	}
 }
 
+func TestSwitchSameWorktreePreemptsExistingProcesses(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+	if err := manager.Switch(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatalf("switch same worktree: %v", err)
+	}
+
+	window := tmux.WindowName("/tmp/repo-main")
+	panes := backend.panes[window]
+	if len(panes) != 1 {
+		t.Fatalf("expected switch to replace existing panes, got %d", len(panes))
+	}
+	if panes[0].Process != "web" {
+		t.Fatalf("expected remaining pane to be web, got %q", panes[0].Process)
+	}
+}
+
 func TestSwitchUsesRequestedProcess(t *testing.T) {
 	t.Parallel()
 	backend := newMockBackend()

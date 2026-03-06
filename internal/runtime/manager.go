@@ -166,7 +166,7 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		if err != nil {
 			return err
 		}
-		if activeDir != "" && filepath.Clean(activeDir) != filepath.Clean(wt.Dir) {
+		if activeDir != "" {
 			if err := m.stopWorktreeProcessByDir(ctx, activeDir); err != nil {
 				return fmt.Errorf("stop previous worktree %q: %w", activeDir, err)
 			}
