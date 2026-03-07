@@ -1,41 +1,83 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-    steps:
-      - name: Run Release Please
-        id: release
-        uses: googleapis/release-please-action@v4
-        with:
-          config-file: .github/release-please-config.json
-          manifest-file: .github/.release-please-manifest.json
-
-  goreleaser:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+  tag:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Verify
+        run: make airflow
+
+      - name: Bump version and tag
+        run: |
+          git fetch --force --tags origin
+
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          commits_since=$(git rev-list "${latest}..HEAD" --count)
+
+          bump="${{ inputs.bump }}"
+          if [ -z "$bump" ]; then
+            bump=patch
+          fi
+
+          if [ "$commits_since" = "0" ]; then
+            echo "No changes since ${latest} — nothing to release."
+            exit 0
+          fi
+
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+
+          case "$bump" in
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          next="v${major}.${minor}.${patch}"
+          echo "Releasing ${next} (${commits_since} commits since ${latest})"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${next}"
+          git push origin "${next}"
+
+  goreleaser:
+    needs: tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v6
