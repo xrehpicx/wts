@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows SemVer.
 
+## [0.3.0](https://github.com/xrehpicx/wts/compare/v0.2.0...v0.3.0) (2026-03-07)
+
+
+### Features
+
+* add make release for auto patch bump, tag, and push ([73cee0d](https://github.com/xrehpicx/wts/commit/73cee0dad81931b922813827b8ca3fa70485380f))
+* fix version display and add GitHub Actions release workflow ([e46deb8](https://github.com/xrehpicx/wts/commit/e46deb862682ef501fa9944a5ba938ca8ca23df7))
+* support multiple processes per worktree via tmux panes ([ae15fbe](https://github.com/xrehpicx/wts/commit/ae15fbe7f25c6a31a100c39aeac9d5bb6a6098b6))
+
+
+### Bug Fixes
+
+* legacy pane matching and reliable exited detection ([adda249](https://github.com/xrehpicx/wts/commit/adda249accc0eedd639e5bd191c8ba61783f8b4d))
+* switch starts only selected process, add vim keybindings ([834e2d8](https://github.com/xrehpicx/wts/commit/834e2d8fd746faa844997677fbe2852a88ee65b3))
+* use pgrep to detect exited processes instead of pane command name ([80081a2](https://github.com/xrehpicx/wts/commit/80081a211fe5f7852b16d5917ee1037d5dcb00c1))
+
 ## [Unreleased]
 
 ## [0.2.0] - 2026-03-05
