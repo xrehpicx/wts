@@ -10,10 +10,13 @@ Worktrees are discovered live from: git worktree list --porcelain.
 Switching preempts the previously active worktree process and starts the selected
 process or group in the target worktree.
 
+Running `wts` with no subcommand opens the interactive TUI.
+
 ### Examples
 
 ```
-wts validate
+wts
+  wts validate
   wts list
   wts switch repo-main --process api
   wts switch repo-main --group dev
@@ -46,4 +49,3 @@ wts validate
 * [wts tui](wts_tui.md)	 - Open interactive Bubble Tea TUI
 * [wts validate](wts_validate.md)	 - Validate .wts.yaml
 * [wts version](wts_version.md)	 - Show wts version
-

@@ -17,6 +17,9 @@ Worktrees are discovered live from: git worktree list --porcelain.
 Switching preempts the previously active worktree process and starts the selected
 process or group in the target worktree.
 
+.PP
+Running \fBwts\fP with no subcommand opens the interactive TUI.
+
 
 .SH OPTIONS
 \fB--config\fP=""
@@ -29,7 +32,8 @@ process or group in the target worktree.
 
 .SH EXAMPLE
 .EX
-wts validate
+wts
+  wts validate
   wts list
   wts switch repo-main --process api
   wts switch repo-main --group dev

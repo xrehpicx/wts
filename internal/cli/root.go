@@ -31,6 +31,7 @@ type app struct {
 	err        io.Writer
 
 	newBackend func() runtime.Backend
+	runTUI     func(context.Context) error
 }
 
 type runtimeContext struct {
@@ -53,6 +54,10 @@ func NewRootCmd(version, commit string) *cobra.Command {
 		},
 	}
 
+	return a.newRootCmd()
+}
+
+func (a *app) newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "wts",
 		Short: "workswitch (wts: worktree switch) process handoff for git worktrees",
@@ -62,6 +67,7 @@ Worktrees are discovered live from: git worktree list --porcelain.
 Switching preempts the previously active worktree process and starts the selected
 process or group in the target worktree.`,
 		Example: strings.TrimSpace(`
+  wts
   wts validate
   wts list
   wts switch repo-main --process api
@@ -72,6 +78,9 @@ process or group in the target worktree.`,
 `),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runTUICommand(cmd.Context())
+		},
 	}
 	root.PersistentFlags().StringVar(&a.configPath, "config", "", "path to .wts.yaml")
 
@@ -96,6 +105,29 @@ process or group in the target worktree.`,
 
 func Execute(version, commit string) error {
 	return NewRootCmd(version, commit).Execute()
+}
+
+func (a *app) runTUICommand(ctx context.Context) error {
+	if a.runTUI != nil {
+		return a.runTUI(ctx)
+	}
+	return a.withRuntime(ctx, func(rc *runtimeContext) error {
+		m := newTUIModel(rc)
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		finalModel, err := p.Run()
+		if err != nil {
+			return err
+		}
+		if tm, ok := finalModel.(*tuiModel); ok {
+			if tm.attachSpec != nil {
+				return tm.rc.manager.Attach(ctx, *tm.attachSpec)
+			}
+			if tm.quitInfo != "" {
+				_, _ = fmt.Fprint(a.out, tm.quitInfo)
+			}
+		}
+		return nil
+	})
 }
 
 func (a *app) withProject(fn func(*model.Project) error) error {
@@ -616,23 +648,7 @@ Exiting TUI does not stop running worktree processes.`),
   wts tui
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
-				m := newTUIModel(rc)
-				p := tea.NewProgram(m, tea.WithAltScreen())
-				finalModel, err := p.Run()
-				if err != nil {
-					return err
-				}
-				if tm, ok := finalModel.(*tuiModel); ok {
-					if tm.attachSpec != nil {
-						return tm.rc.manager.Attach(cmd.Context(), *tm.attachSpec)
-					}
-					if tm.quitInfo != "" {
-						_, _ = fmt.Fprint(a.out, tm.quitInfo)
-					}
-				}
-				return nil
-			})
+			return a.runTUICommand(cmd.Context())
 		},
 	}
 }

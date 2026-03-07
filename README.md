@@ -31,10 +31,10 @@ go install github.com/xrehpicx/wts@main
 ```bash
 cd my-project
 wts init
-wts tui
+wts
 ```
 
-`wts init` generates `.wts.yaml` for the current repo. `wts tui` opens the worktree/process switcher.
+`wts` opens the worktree/process switcher. `wts init` generates `.wts.yaml` for the current repo. `wts tui` remains available as an explicit alias for the TUI.
 
 ## More
 
