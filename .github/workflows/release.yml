@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       bump:
@@ -13,11 +16,11 @@ on:
           - minor
 
 jobs:
-  release:
+  tag:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,7 +58,6 @@ jobs:
           esac
 
           next="v${major}.${minor}.${patch}"
-          echo "NEXT_TAG=${next}" >> "$GITHUB_ENV"
           echo "Releasing ${next} (${commits_since} commits since ${latest})"
 
           git config user.name "github-actions[bot]"
@@ -63,11 +65,26 @@ jobs:
           git tag "${next}"
           git push origin "${next}"
 
-      - name: Create GitHub release
-        if: env.NEXT_TAG != ''
-        run: |
-          gh release create "${{ env.NEXT_TAG }}" \
-            --title "${{ env.NEXT_TAG }}" \
-            --generate-notes
+  goreleaser:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
