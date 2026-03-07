@@ -24,7 +24,7 @@ type Backend interface {
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
 	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
 	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
-	Attach(ctx context.Context, session, window string) error
+	Attach(ctx context.Context, session, window, paneID string) error
 
 	SetPaneTitle(ctx context.Context, session, window, title string) error
 	SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
@@ -47,6 +47,12 @@ type RunOptions struct {
 	Group   string
 }
 
+type AttachSpec struct {
+	Session string
+	Window  string
+	PaneID  string
+}
+
 type ProcessStatus struct {
 	Name    string `json:"name"`
 	Running bool   `json:"running"`
@@ -63,6 +69,7 @@ type StatusRow struct {
 	Active    bool            `json:"active"`
 	Branch    string          `json:"branch"`
 	Dir       string          `json:"dir"`
+	Prunable  bool            `json:"prunable,omitempty"`
 }
 
 func NewManager(project *model.Project, repoRoot string, worktrees []gitwt.Worktree, backend Backend) *Manager {
@@ -237,12 +244,63 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 	}
 
 	if opts.Attach {
-		if err := m.backend.Attach(ctx, m.session, windowName); err != nil {
+		spec := AttachSpec{
+			Session: m.session,
+			Window:  windowName,
+		}
+		if target.Kind == model.TargetProcess {
+			if pane := m.findProcessPane(ctx, wt, target.Name); pane != nil {
+				spec.PaneID = pane.ID
+			}
+		}
+		if err := m.backend.Attach(ctx, spec.Session, spec.Window, spec.PaneID); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (m *Manager) ResolveAttach(ctx context.Context, worktree string, opts RunOptions) (AttachSpec, error) {
+	wt, err := m.resolveWorktree(worktree)
+	if err != nil {
+		return AttachSpec{}, err
+	}
+	target, err := m.resolveTarget(opts)
+	if err != nil {
+		return AttachSpec{}, err
+	}
+	if err := m.ensureReady(ctx); err != nil {
+		return AttachSpec{}, err
+	}
+
+	windowName := tmux.WindowName(wt.Dir)
+	windowExists, err := m.backend.HasWindow(ctx, m.session, windowName)
+	if err != nil {
+		return AttachSpec{}, err
+	}
+	if !windowExists {
+		return AttachSpec{}, fmt.Errorf("worktree %q is not running", wt.Name)
+	}
+
+	spec := AttachSpec{
+		Session: m.session,
+		Window:  windowName,
+	}
+	if target.Kind != model.TargetProcess {
+		return spec, nil
+	}
+
+	pane := m.findProcessPane(ctx, wt, target.Name)
+	if pane == nil {
+		return AttachSpec{}, fmt.Errorf("process %q not running in worktree %q", target.Name, wt.Name)
+	}
+	spec.PaneID = pane.ID
+	return spec, nil
+}
+
+func (m *Manager) Attach(ctx context.Context, spec AttachSpec) error {
+	return m.backend.Attach(ctx, spec.Session, spec.Window, spec.PaneID)
 }
 
 // findProcessPane returns the PaneInfo for a running process in a worktree, or nil.
@@ -582,6 +640,7 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 			Active:    active,
 			Branch:    wt.Branch,
 			Dir:       wt.Dir,
+			Prunable:  wt.Prunable,
 		})
 	}
 

@@ -17,6 +17,7 @@ type mockBackend struct {
 	stopCount   map[string]int
 	panes       map[string][]tmux.PaneInfo // window -> panes
 	exitedByPID map[string]bool
+	attachCalls []AttachSpec
 }
 
 func newMockBackend() *mockBackend {
@@ -68,7 +69,14 @@ func (m *mockBackend) CapturePane(context.Context, string, string, int) (string,
 func (m *mockBackend) PaneCurrentCommand(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (m *mockBackend) Attach(context.Context, string, string) error { return nil }
+func (m *mockBackend) Attach(_ context.Context, session, window, paneID string) error {
+	m.attachCalls = append(m.attachCalls, AttachSpec{
+		Session: session,
+		Window:  window,
+		PaneID:  paneID,
+	})
+	return nil
+}
 
 func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) error {
 	if len(m.panes[window]) > 0 {
@@ -817,5 +825,71 @@ func TestSwitchPreemptsButStartDoesNot(t *testing.T) {
 	}
 	if !backend.windows[winAgent] {
 		t.Fatalf("expected repo-agent running")
+	}
+}
+
+func TestResolveAttachForProcessSelectsPane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+
+	spec, err := manager.ResolveAttach(ctx, "repo-main", RunOptions{Process: "web"})
+	if err != nil {
+		t.Fatalf("resolve attach: %v", err)
+	}
+
+	if spec.Session != manager.Session() {
+		t.Fatalf("unexpected session: %q", spec.Session)
+	}
+	if spec.Window != tmux.WindowName("/tmp/repo-main") {
+		t.Fatalf("unexpected window: %q", spec.Window)
+	}
+	if spec.PaneID != "%1" {
+		t.Fatalf("expected web pane selected, got %q", spec.PaneID)
+	}
+}
+
+func TestResolveAttachForGroupUsesWindow(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx, "repo-main", RunOptions{Group: "dev"}); err != nil {
+		t.Fatalf("start group: %v", err)
+	}
+
+	spec, err := manager.ResolveAttach(ctx, "repo-main", RunOptions{Group: "dev"})
+	if err != nil {
+		t.Fatalf("resolve attach: %v", err)
+	}
+
+	if spec.Window != tmux.WindowName("/tmp/repo-main") {
+		t.Fatalf("unexpected window: %q", spec.Window)
+	}
+	if spec.PaneID != "" {
+		t.Fatalf("expected group attach to focus window, got pane %q", spec.PaneID)
+	}
+}
+
+func TestStartWithAttachFocusesSelectedProcessPane(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+
+	if err := manager.Start(context.Background(), "repo-main", RunOptions{Process: "api", Attach: true}); err != nil {
+		t.Fatalf("start with attach: %v", err)
+	}
+
+	if len(backend.attachCalls) != 1 {
+		t.Fatalf("expected one attach call, got %d", len(backend.attachCalls))
+	}
+	if backend.attachCalls[0].PaneID != "%0" {
+		t.Fatalf("expected attach to focus api pane, got %q", backend.attachCalls[0].PaneID)
 	}
 }

@@ -23,6 +23,7 @@ import (
 
 type actionDoneMsg struct{ text string }
 type actionErrMsg struct{ err error }
+type attachReadyMsg struct{ spec runtime.AttachSpec }
 type groupCreatedMsg struct {
 	project *model.Project
 	target  model.Target
@@ -89,6 +90,7 @@ type tuiModel struct {
 	loadingDir          string
 	loadingMsg          string
 	quitInfo            string
+	attachSpec          *runtime.AttachSpec
 	filterMode          bool
 	filterInput         textinput.Model
 	preFilterIdx        int
@@ -108,6 +110,7 @@ type tuiKeyMap struct {
 	Restart     key.Binding
 	Stop        key.Binding
 	StopAll     key.Binding
+	Attach      key.Binding
 	ProcPrev    key.Binding
 	ProcNext    key.Binding
 	Filter      key.Binding
@@ -124,6 +127,7 @@ func newTUIKeyMap() tuiKeyMap {
 		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart target")),
 		Stop:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop target")),
 		StopAll:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop all")),
+		Attach:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attach tmux")),
 		ProcPrev:    key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev target")),
 		ProcNext:    key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next target")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search target")),
@@ -134,12 +138,12 @@ func newTUIKeyMap() tuiKeyMap {
 }
 
 func (k tuiKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit}
+	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit}
 }
 
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll},
+		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach},
 		{k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit},
 	}
 }
@@ -303,6 +307,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingMsg = ""
 		m.message = msg.err.Error()
 		m.messageIsErr = true
+	case attachReadyMsg:
+		m.loading = false
+		m.loadingDir = ""
+		m.loadingMsg = ""
+		m.attachSpec = &msg.spec
+		m.quitInfo = ""
+		return m, tea.Quit
 	case groupCreatedMsg:
 		m.loading = false
 		m.loadingDir = ""
@@ -384,6 +395,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.stopAllCurrentCmd()
 		case key.Matches(msg, m.keys.Stop):
 			return m, m.stopCurrentCmd()
+		case key.Matches(msg, m.keys.Attach):
+			return m, m.attachCurrentCmd()
 		case key.Matches(msg, m.keys.ProcNext):
 			m.cycleTarget(1)
 		case key.Matches(msg, m.keys.ProcPrev):
@@ -495,7 +508,7 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 	spacer := 1
 	usableWidth := max(20, width-spacer)
-	leftWidth := max(24, (usableWidth*1)/4)
+	leftWidth := max(28, (usableWidth*3)/10)
 	rightWidth := max(30, usableWidth-leftWidth)
 	if leftWidth+rightWidth > width {
 		rightWidth = usableWidth - leftWidth
@@ -512,21 +525,36 @@ func (m *tuiModel) renderContent(width, height int) string {
 
 func (m *tuiModel) renderListPanel(width, height int) string {
 	maxTextWidth := max(12, width-4)
-	nameWidth := min(14, maxTextWidth-10)
-	lines := make([]string, 0, len(m.rows)+2)
+	lines := make([]string, 0, len(m.rows)*3)
 
-	colHdr := fmt.Sprintf("    %-*s %s", nameWidth, "WORKTREE", "BRANCH")
-	lines = append(lines, m.styles.colHeader.Render(truncateLine(colHdr, maxTextWidth)))
+	// Compute display names, disambiguating when names collide.
+	nameCount := map[string]int{}
+	for _, r := range m.rows {
+		nameCount[r.Worktree]++
+	}
+	displayNames := make([]string, len(m.rows))
+	for i, r := range m.rows {
+		if nameCount[r.Worktree] > 1 {
+			parent := filepath.Base(filepath.Dir(r.Dir))
+			displayNames[i] = r.Worktree + " (" + parent + ")"
+		} else {
+			displayNames[i] = r.Worktree
+		}
+	}
 
 	for i := range m.rows {
 		row := m.rows[i]
+
+		// --- Line 1: cursor + dot + name + badge ---
 		cursor := "  "
 		if i == m.idx {
 			cursor = "▸ "
 		}
 
 		var dot string
-		if m.loading && row.Dir == m.loadingDir {
+		if row.Prunable {
+			dot = m.styles.exitedDot.Render("⚠")
+		} else if m.loading && row.Dir == m.loadingDir {
 			dot = m.spinner.View()
 		} else if row.Running && row.Exited {
 			dot = m.styles.exitedDot.Render("●")
@@ -536,25 +564,77 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 			dot = m.styles.stopDot.Render("○")
 		}
 
-		// Show process count if multiple are running.
-		procCount := ""
-		if len(row.Processes) > 1 {
-			procCount = m.styles.dimText.Render(fmt.Sprintf(" ×%d", len(row.Processes)))
+		nameText := truncateLine(displayNames[i], max(1, maxTextWidth-6))
+		namePart := cursor + dot + " " + nameText
+
+		// Right-aligned badge.
+		procBadge := ""
+		if row.Prunable {
+			procBadge = "prunable"
+		} else if len(row.Processes) > 1 {
+			procBadge = fmt.Sprintf("×%d", len(row.Processes))
+		} else if row.Active {
+			procBadge = "★"
 		}
 
-		line := fmt.Sprintf("%s%s %-*s %s%s",
-			cursor, dot,
-			nameWidth, truncateLine(row.Worktree, nameWidth),
-			truncateLine(row.Branch, max(1, maxTextWidth-nameWidth-5)),
-			procCount,
-		)
-
-		if i == m.idx {
-			line = m.styles.selectedRow.Render(line)
+		var line1 string
+		if procBadge != "" {
+			nameW := lipgloss.Width(namePart)
+			badgeW := lipgloss.Width(procBadge)
+			gap := max(1, maxTextWidth-nameW-badgeW)
+			line1 = namePart + strings.Repeat(" ", gap) + m.styles.dimText.Render(procBadge)
 		} else {
-			line = m.styles.row.Render(line)
+			line1 = namePart
 		}
-		lines = append(lines, line)
+
+		// --- Line 2: branch (indented, dimmed) + process names ---
+		branchIndent := "     "
+		availW := max(1, maxTextWidth-len(branchIndent))
+		branchText := truncateLine(row.Branch, availW)
+
+		var line2 string
+		if row.Prunable {
+			line2 = branchIndent + m.styles.dimText.Render(branchText)
+		} else if len(row.Processes) > 0 && row.Running {
+			// Show compact process status dots after branch.
+			procParts := make([]string, 0, len(row.Processes))
+			for _, p := range row.Processes {
+				var pdot string
+				if p.Running && p.Exited {
+					pdot = m.styles.exitedDot.Render("●")
+				} else if p.Running {
+					pdot = m.styles.runDot.Render("●")
+				} else {
+					pdot = m.styles.stopDot.Render("○")
+				}
+				procParts = append(procParts, pdot+" "+m.styles.dimText.Render(p.Name))
+			}
+			procInfo := strings.Join(procParts, m.styles.dimText.Render(" · "))
+			branchLine := m.styles.dimText.Render(branchText)
+			sep := m.styles.dimText.Render(" · ")
+			combined := branchLine + sep + procInfo
+			if lipgloss.Width(combined) > availW {
+				line2 = branchIndent + m.styles.dimText.Render(branchText)
+			} else {
+				line2 = branchIndent + combined
+			}
+		} else {
+			line2 = branchIndent + m.styles.dimText.Render(branchText)
+		}
+
+		// Apply selection styling padded to full width for uniform highlight.
+		if i == m.idx {
+			sel := m.styles.selectedRow.Width(maxTextWidth)
+			line1 = sel.Render(line1)
+			line2 = sel.Render(line2)
+		}
+
+		lines = append(lines, line1, line2)
+
+		// Add a blank separator between entries (except after the last one).
+		if i < len(m.rows)-1 {
+			lines = append(lines, "")
+		}
 	}
 
 	return m.renderPanel("Worktrees", lines, width, height, true)
@@ -648,9 +728,9 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 		targetNoun = "process"
 	}
 	if row.Running && row.Exited {
-		hint = m.styles.dimText.Render("r restart · x stop · " + targetNoun + " exited")
+		hint = m.styles.dimText.Render("a attach tmux · r restart · x stop · " + targetNoun + " exited")
 	} else if row.Running {
-		hint = m.styles.dimText.Render("s/↵ add " + targetNoun + " · r restart · x stop")
+		hint = m.styles.dimText.Render("s/↵ add " + targetNoun + " · a attach tmux · r restart · x stop")
 	} else {
 		hint = m.styles.dimText.Render("s/↵ start " + targetNoun)
 	}
@@ -1229,6 +1309,38 @@ func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
 			return actionErrMsg{err: err}
 		}
 		return actionDoneMsg{text: "stopped all in " + name}
+	}
+	return tea.Batch(m.spinner.Tick, action)
+}
+
+func (m *tuiModel) attachCurrentCmd() tea.Cmd {
+	row := m.current()
+	if row == nil {
+		return nil
+	}
+	target, ok := m.selectedTarget()
+	if !ok {
+		m.message = "select a process or group first with ←/→"
+		m.messageIsErr = true
+		return nil
+	}
+	if !row.Running {
+		m.message = "selected worktree is not running"
+		m.messageIsErr = true
+		return nil
+	}
+
+	dir, name := row.Dir, row.Worktree
+	m.loading = true
+	m.loadingDir = dir
+	m.loadingMsg = "attaching " + formatTargetLabel(target) + " in " + name + "..."
+
+	action := func() tea.Msg {
+		spec, err := m.rc.manager.ResolveAttach(context.Background(), dir, runOptionsForTarget(target))
+		if err != nil {
+			return actionErrMsg{err: err}
+		}
+		return attachReadyMsg{spec: spec}
 	}
 	return tea.Batch(m.spinner.Tick, action)
 }

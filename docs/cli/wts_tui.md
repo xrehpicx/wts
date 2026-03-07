@@ -16,7 +16,8 @@ to the current repo's .wts.yaml.
 Shortcuts:
   j/↓      next worktree        h/←    prev target
   k/↑      prev worktree        l/→    next target
-  s/enter  start/switch target   r      restart target
+  s/enter  start/switch target   a      attach tmux
+  r        restart target
   x        stop selected target  /      search target by name
   g        create group in .wts.yaml
   X        stop all in worktree  ?      toggle full help
@@ -49,4 +50,3 @@ wts tui
 ### SEE ALSO
 
 * [wts](wts.md)	 - workswitch (wts: worktree switch) process handoff for git worktrees
-

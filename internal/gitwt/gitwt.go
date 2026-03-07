@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -15,12 +16,14 @@ const (
 )
 
 type Worktree struct {
-	Name     string
-	Dir      string
-	Branch   string
-	Head     string
-	Bare     bool
-	Detached bool
+	Name           string
+	Dir            string
+	Branch         string
+	Head           string
+	Bare           bool
+	Detached       bool
+	Prunable       bool
+	PrunableReason string
 }
 
 func Discover(repoRoot string) ([]Worktree, error) {
@@ -45,6 +48,28 @@ func Discover(repoRoot string) ([]Worktree, error) {
 	}
 	if len(items) == 0 {
 		return nil, fmt.Errorf("no git worktrees found")
+	}
+
+	// Mark prunable worktrees: duplicate dirs or missing directories.
+	seen := map[string]bool{}
+	for i := range items {
+		dir := items[i].Dir
+		if seen[dir] {
+			items[i].Prunable = true
+			if items[i].PrunableReason == "" {
+				items[i].PrunableReason = "duplicate entry"
+			}
+		} else {
+			seen[dir] = true
+			if !items[i].Bare && !items[i].Prunable {
+				if _, err := os.Stat(dir); os.IsNotExist(err) {
+					items[i].Prunable = true
+					if items[i].PrunableReason == "" {
+						items[i].PrunableReason = "directory not found"
+					}
+				}
+			}
+		}
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -146,6 +171,9 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 			current.Bare = true
 		case line == "detached":
 			current.Detached = true
+		case strings.HasPrefix(line, "prunable "):
+			current.Prunable = true
+			current.PrunableReason = strings.TrimSpace(strings.TrimPrefix(line, "prunable "))
 		}
 	}
 	if err := scanner.Err(); err != nil {

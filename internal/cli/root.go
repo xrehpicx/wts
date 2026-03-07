@@ -54,9 +54,8 @@ func NewRootCmd(version, commit string) *cobra.Command {
 	}
 
 	root := &cobra.Command{
-		Use:     "wts",
-		Aliases: []string{"workswitch", "wks"},
-		Short:   "workswitch (wts: worktree switch) process handoff for git worktrees",
+		Use:   "wts",
+		Short: "workswitch (wts: worktree switch) process handoff for git worktrees",
 		Long: `Process config lives in .wts.yaml.
 Worktrees are discovered live from: git worktree list --porcelain.
 
@@ -605,7 +604,8 @@ to the current repo's .wts.yaml.
 Shortcuts:
   j/↓      next worktree        h/←    prev target
   k/↑      prev worktree        l/→    next target
-  s/enter  start/switch target   r      restart target
+  s/enter  start/switch target   a      attach tmux
+  r        restart target
   x        stop selected target  /      search target by name
   g        create group in .wts.yaml
   X        stop all in worktree  ?      toggle full help
@@ -623,8 +623,13 @@ Exiting TUI does not stop running worktree processes.`),
 				if err != nil {
 					return err
 				}
-				if tm, ok := finalModel.(*tuiModel); ok && tm.quitInfo != "" {
-					_, _ = fmt.Fprint(a.out, tm.quitInfo)
+				if tm, ok := finalModel.(*tuiModel); ok {
+					if tm.attachSpec != nil {
+						return tm.rc.manager.Attach(cmd.Context(), *tm.attachSpec)
+					}
+					if tm.quitInfo != "" {
+						_, _ = fmt.Fprint(a.out, tm.quitInfo)
+					}
 				}
 				return nil
 			})

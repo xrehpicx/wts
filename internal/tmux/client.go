@@ -31,7 +31,7 @@ type Backend interface {
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
 	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
 	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
-	Attach(ctx context.Context, session, window string) error
+	Attach(ctx context.Context, session, window, paneID string) error
 
 	// Multi-process pane management
 	SetPaneTitle(ctx context.Context, session, window, title string) error
@@ -241,9 +241,14 @@ func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string)
 	return "running", nil
 }
 
-func (c *Client) Attach(ctx context.Context, session, window string) error {
+func (c *Client) Attach(ctx context.Context, session, window, paneID string) error {
 	if _, err := c.runner.Run(ctx, c.bin, "select-window", "-t", session+":"+window); err != nil {
 		return fmt.Errorf("select window %q: %w", window, err)
+	}
+	if paneID != "" {
+		if _, err := c.runner.Run(ctx, c.bin, "select-pane", "-t", paneID); err != nil {
+			return fmt.Errorf("select pane %q: %w", paneID, err)
+		}
 	}
 	if os.Getenv("TMUX") != "" {
 		if _, err := c.runner.Run(ctx, c.bin, "switch-client", "-t", session); err != nil {
@@ -251,7 +256,11 @@ func (c *Client) Attach(ctx context.Context, session, window string) error {
 		}
 		return nil
 	}
-	if _, err := c.runner.Run(ctx, c.bin, "attach-session", "-t", session); err != nil {
+	cmd := exec.CommandContext(ctx, c.bin, "attach-session", "-t", session)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("attach tmux session %q: %w", session, err)
 	}
 	return nil
