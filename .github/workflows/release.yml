@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -17,7 +19,7 @@ on:
 
 jobs:
   tag:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -37,8 +39,15 @@ jobs:
 
       - name: Bump version and tag
         run: |
+          git fetch --force --tags origin
+
           latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           commits_since=$(git rev-list "${latest}..HEAD" --count)
+
+          bump="${{ inputs.bump }}"
+          if [ -z "$bump" ]; then
+            bump=patch
+          fi
 
           if [ "$commits_since" = "0" ]; then
             echo "No changes since ${latest} — nothing to release."
@@ -47,7 +56,7 @@ jobs:
 
           IFS='.' read -r major minor patch <<< "${latest#v}"
 
-          case "${{ inputs.bump }}" in
+          case "$bump" in
             minor)
               minor=$((minor + 1))
               patch=0
@@ -66,7 +75,7 @@ jobs:
           git push origin "${next}"
 
   goreleaser:
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
