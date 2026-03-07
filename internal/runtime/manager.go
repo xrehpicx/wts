@@ -87,6 +87,12 @@ func (m *Manager) Session() string {
 	return m.session
 }
 
+func (m *Manager) UpdateWorktrees(worktrees []gitwt.Worktree) {
+	items := make([]gitwt.Worktree, len(worktrees))
+	copy(items, worktrees)
+	m.worktrees = items
+}
+
 func (m *Manager) ActiveProcess(ctx context.Context) string {
 	name, _ := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
 	return name

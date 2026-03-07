@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xrehpicx/wts/internal/config"
+	"github.com/xrehpicx/wts/internal/gitwt"
 	"github.com/xrehpicx/wts/internal/model"
 	"github.com/xrehpicx/wts/internal/runtime"
 	"github.com/xrehpicx/wts/internal/tmux"
@@ -1398,6 +1399,10 @@ func (m *tuiModel) scheduleLogRefresh() tea.Cmd {
 
 func (m *tuiModel) refreshStatusCmd() tea.Cmd {
 	return func() tea.Msg {
+		if wts, err := gitwt.Discover(m.rc.repoRoot); err == nil {
+			m.rc.worktrees = wts
+			m.rc.manager.UpdateWorktrees(wts)
+		}
 		rows, err := m.rc.manager.Status(context.Background(), "")
 		return statusRefreshedMsg{rows: rows, err: err}
 	}
