@@ -97,6 +97,7 @@ type tuiModel struct {
 	preFilterIdx        int
 	logLines            map[string][]string
 	logDir              string
+	fullscreenMode      bool
 	createGroupMode     bool
 	createGroupInput    textinput.Model
 	createGroupFocus    createGroupFocus
@@ -116,6 +117,7 @@ type tuiKeyMap struct {
 	ProcNext    key.Binding
 	Filter      key.Binding
 	CreateGroup key.Binding
+	Fullscreen  key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 }
@@ -133,19 +135,20 @@ func newTUIKeyMap() tuiKeyMap {
 		ProcNext:    key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next target")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search target")),
 		CreateGroup: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "new group")),
+		Fullscreen:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fullscreen")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k tuiKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit}
+	return []key.Binding{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach, k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Fullscreen, k.Help, k.Quit}
 }
 
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach},
-		{k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit},
+		{k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Fullscreen, k.Help, k.Quit},
 	}
 }
 
@@ -362,6 +365,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickLogsMsg:
 		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd(), m.scheduleLogRefresh())
 	case tea.KeyMsg:
+		if m.fullscreenMode {
+			return m.updateFullscreenKeys(msg)
+		}
 		if m.createGroupMode {
 			return m.updateCreateGroupKeys(msg)
 		}
@@ -406,6 +412,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.enterFilterMode()
 		case key.Matches(msg, m.keys.CreateGroup):
 			return m, m.enterCreateGroupMode()
+		case key.Matches(msg, m.keys.Fullscreen):
+			m.fullscreenMode = true
+			return m, m.fetchLogsCmd()
 		}
 	}
 
@@ -425,6 +434,10 @@ func (m *tuiModel) View() string {
 	}
 	if h <= 0 {
 		h = 30
+	}
+
+	if m.fullscreenMode {
+		return m.renderFullscreen(w, h)
 	}
 
 	header := m.renderHeader(w)
@@ -996,6 +1009,148 @@ func (m *tuiModel) renderGroupLogs(target model.Target, logSpace, maxW int) []st
 	return lines
 }
 
+// --- Fullscreen mode ---
+
+func (m *tuiModel) updateFullscreenKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Fullscreen):
+		m.fullscreenMode = false
+		return m, m.fetchLogsCmd()
+	case msg.Type == tea.KeyEsc:
+		m.fullscreenMode = false
+		return m, m.fetchLogsCmd()
+	case key.Matches(msg, m.keys.Quit):
+		m.buildQuitInfo()
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// fullscreenGrid computes how many panes per row for n processes.
+// Layout: up to 3 columns, then add rows. Top rows get extra panes.
+// e.g. 5 → [3, 2], 7 → [3, 2, 2], 4 → [2, 2]
+func fullscreenGrid(n int) []int {
+	if n <= 0 {
+		return nil
+	}
+	if n <= 3 {
+		return []int{n}
+	}
+	numRows := (n + 2) / 3 // ceil(n/3)
+	base := n / numRows
+	extra := n % numRows
+	rows := make([]int, numRows)
+	for i := range rows {
+		rows[i] = base
+		if i < extra {
+			rows[i]++
+		}
+	}
+	return rows
+}
+
+func (m *tuiModel) renderFullscreen(width, height int) string {
+	row := m.current()
+	if row == nil || len(row.Processes) == 0 {
+		hint := m.styles.dimText.Render("No processes running. Press f or Esc to go back.")
+		pad := lipgloss.NewStyle().Width(width).Height(height).AlignVertical(lipgloss.Center).AlignHorizontal(lipgloss.Center)
+		return pad.Render(hint)
+	}
+
+	processes := row.Processes
+	n := len(processes)
+	grid := fullscreenGrid(n)
+
+	// Footer line
+	footerText := m.styles.dimText.Render(" f exit fullscreen · q quit")
+	footerH := 1
+
+	// Available height for pane rows
+	availH := max(1, height-footerH)
+	numRows := len(grid)
+	rowHeight := max(3, availH/numRows)
+
+	// Build each row of panes
+	procIdx := 0
+	renderedRows := make([]string, 0, numRows)
+	for ri, colCount := range grid {
+		// Last row gets remaining height
+		rh := rowHeight
+		if ri == numRows-1 {
+			rh = max(3, availH-rowHeight*(numRows-1))
+		}
+
+		colWidth := max(10, width/colCount)
+		panes := make([]string, 0, colCount)
+		for ci := 0; ci < colCount; ci++ {
+			if procIdx >= n {
+				break
+			}
+			p := processes[procIdx]
+			procIdx++
+
+			// Last column in row gets remaining width
+			pw := colWidth
+			if ci == colCount-1 {
+				pw = max(10, width-colWidth*(colCount-1))
+			}
+
+			panes = append(panes, m.renderFullscreenPane(p, pw, rh))
+		}
+		renderedRows = append(renderedRows, lipgloss.JoinHorizontal(lipgloss.Top, panes...))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, renderedRows...)
+	return lipgloss.JoinVertical(lipgloss.Left, content, footerText)
+}
+
+func (m *tuiModel) renderFullscreenPane(p runtime.ProcessStatus, width, height int) string {
+	// Title with status dot
+	var dot string
+	if p.Running && p.Exited {
+		dot = m.styles.exitedDot.Render("●")
+	} else if p.Running {
+		dot = m.styles.runDot.Render("●")
+	} else {
+		dot = m.styles.stopDot.Render("○")
+	}
+	title := dot + " " + p.Name
+
+	// Border takes 2 rows (top/bottom) and 2+2 cols (border + padding)
+	innerW := max(1, width-4)
+	innerH := max(1, height-2)
+
+	// Fill with log lines
+	logSpace := max(0, innerH-1) // 1 line for title
+	lines := make([]string, 0, innerH)
+	lines = append(lines, m.styles.panelTitle.Render(truncateLine(title, innerW)))
+
+	logs := m.logLines[p.Name]
+	if len(logs) > 0 {
+		start := max(0, len(logs)-logSpace)
+		for _, l := range logs[start:] {
+			lines = append(lines, m.styles.logText.Render(truncateLine(l, innerW)))
+		}
+	} else if !p.Running {
+		lines = append(lines, m.styles.dimText.Render("not running"))
+	} else {
+		lines = append(lines, m.styles.dimText.Render("waiting for output..."))
+	}
+
+	for len(lines) < innerH {
+		lines = append(lines, "")
+	}
+	if len(lines) > innerH {
+		lines = lines[:innerH]
+	}
+
+	border := m.styles.panelBorder
+	if p.Running && !p.Exited {
+		border = m.styles.panelFocus
+	}
+	return border.Width(width).Height(height).Render(strings.Join(lines, "\n"))
+}
+
 func sameTarget(left, right model.Target) bool {
 	return left.Kind == right.Kind && left.Name == right.Name
 }
@@ -1355,6 +1510,27 @@ func (m *tuiModel) fetchLogsCmd() tea.Cmd {
 	}
 	dir := row.Dir
 	target, ok := m.selectedTarget()
+
+	// In fullscreen mode, fetch logs for all running processes in the worktree.
+	if m.fullscreenMode {
+		processes := row.Processes
+		return func() tea.Msg {
+			linesByTarget := map[string][]string{}
+			for _, p := range processes {
+				output, err := m.rc.manager.Logs(context.Background(), dir, p.Name, 200)
+				if err != nil {
+					continue
+				}
+				raw := strings.TrimRight(output, "\n")
+				if raw == "" {
+					continue
+				}
+				linesByTarget[p.Name] = strings.Split(raw, "\n")
+			}
+			return logsMsg{dir: dir, linesByTarget: linesByTarget}
+		}
+	}
+
 	return func() tea.Msg {
 		linesByTarget := map[string][]string{}
 		if ok && target.Kind == model.TargetGroup {
