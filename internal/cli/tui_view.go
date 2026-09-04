@@ -21,130 +21,103 @@ func (m *tuiModel) View() tea.View {
 	if h <= 0 {
 		h = 30
 	}
-	if h < 5 {
-		content := truncateLine(" wts · "+filepath.Base(m.rc.repoRoot), w)
-		view := tea.NewView(content)
-		view.AltScreen = true
-		view.WindowTitle = "wts · " + filepath.Base(m.rc.repoRoot)
-		return view
+	var content string
+	if h < 9 || w < 16 {
+		lines := []string{" wts · " + filepath.Base(m.rc.repoRoot)}
+		if m.loading {
+			lines = append(lines, m.loadingMsg)
+		} else if m.message != "" {
+			lines = append(lines, m.message)
+		}
+		if row := m.current(); row != nil {
+			lines = append(lines, "Selected: "+row.Worktree)
+		}
+		if target, ok := m.selectedTarget(); ok {
+			lines = append(lines, formatTargetLabel(target))
+		}
+		lines = append(lines, "Resize for full view · q quit")
+		content = fitBlock(strings.Join(lines, "\n"), w, h)
+	} else {
+		header, footer := m.renderHeader(w), m.renderFooter(w)
+		contentH := max(1, h-lipgloss.Height(header)-lipgloss.Height(footer))
+		content = lipgloss.JoinVertical(lipgloss.Left, header, m.renderContent(w, contentH), footer)
 	}
-
-	header := m.renderHeader(w)
-	footer := m.renderFooter(w)
-
-	contentH := max(1, h-lipgloss.Height(header)-lipgloss.Height(footer))
-	content := m.renderContent(w, contentH)
-
-	view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, content, footer))
+	view := tea.NewView(fitBlock(content, w, h))
 	view.AltScreen = true
 	view.WindowTitle = "wts · " + filepath.Base(m.rc.repoRoot)
 	return view
 }
 
-// --- Render sections ---
-
+// Feedback has its own row so a long target name never hides an error.
 func (m *tuiModel) renderHeader(width int) string {
-	repoName := filepath.Base(m.rc.repoRoot)
-
-	topLeft := " " + m.styles.title.Render("wts") + m.styles.dimText.Render(" · "+repoName)
-	topRight := m.styles.subtitle.Render(fmt.Sprintf("%d worktrees", len(m.rows))) + " "
-
-	row1 := headerRow(topLeft, topRight, width)
-
-	var botLeft, botRight string
-
-	if m.filterMode {
-		botLeft = " " + m.styles.dimText.Render("/") + " " + m.filterInput.View()
-		count := m.countFilterMatches(m.filterInput.Value())
-		botRight = m.styles.subtitle.Render(fmt.Sprintf("%d matching", count)) + " "
-	} else {
-		target, ok := m.selectedTarget()
-		active := m.activeRow()
-		var summary string
-		targetLabel := "no target"
-		if ok {
-			targetLabel = formatTargetLabel(target)
-		}
-		if active != nil {
-			wt := m.styles.metaValue.Render(active.Worktree)
-			branch := m.styles.dimText.Render(" [" + active.Branch + "]")
-			var dot string
-			nprocs := len(active.Processes)
-			if active.Running && active.Exited {
-				dot = m.styles.exitedDot.Render(" · ● exited")
-			} else if active.Running && nprocs > 1 {
-				dot = m.styles.runDot.Render(fmt.Sprintf(" · ● %d running", nprocs))
-			} else if active.Running {
-				dot = m.styles.runDot.Render(" · ● running")
-			} else {
-				dot = m.styles.stopDot.Render(" · ○ stopped")
-			}
-			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" → ") + wt + branch + dot
-		} else if !ok {
-			summary = m.styles.dimText.Render("select a process or group with ←/→")
-		} else {
-			summary = m.styles.title.Render(targetLabel) + m.styles.dimText.Render(" (idle)")
-		}
-		botLeft = " " + summary
-
-		if m.loading {
-			botRight = m.styles.statusBusy.Render(m.spinner.View()+" "+m.loadingMsg) + "  "
-		} else if m.message != "" {
-			if m.messageIsErr {
-				botRight = m.styles.statusErr.Render("✗ "+m.message) + " "
-			} else {
-				botRight = m.styles.statusOk.Render("✓ "+m.message) + " "
-			}
-		}
+	left := " " + m.styles.title.Render("wts") + m.styles.subtitle.Render(" · "+filepath.Base(m.rc.repoRoot))
+	right := m.styles.subtitle.Render(fmt.Sprintf("%d worktrees", len(m.rows))) + " "
+	lines := []string{headerRow(left, right, width)}
+	selected := "No worktree selected"
+	if row := m.current(); row != nil {
+		selected = row.Worktree
 	}
-
-	row2 := headerRow(botLeft, botRight, width)
-	sep := m.styles.separator.Render(strings.Repeat("─", width))
-
-	return lipgloss.JoinVertical(lipgloss.Left, row1, row2, sep)
+	targetLabel := "No target"
+	if target, ok := m.selectedTarget(); ok {
+		targetLabel = formatTargetLabel(target)
+	}
+	lines = append(lines, truncateLine(" "+m.styles.metaValue.Render(selected)+m.styles.dimText.Render(" / ")+m.styles.title.Render(targetLabel), width))
+	if m.loading {
+		lines = append(lines, truncateLine(" "+m.styles.statusBusy.Render(m.spinner.View()+" "+m.loadingMsg), width))
+	} else if m.message != "" {
+		style := m.styles.statusOk
+		prefix := "✓ "
+		if m.messageIsErr {
+			style = m.styles.statusErr
+			prefix = "✗ "
+		}
+		lines = append(lines, truncateLine(" "+style.Render(prefix+m.message), width))
+	}
+	lines = append(lines, m.styles.separator.Render(strings.Repeat("─", max(0, width))))
+	return strings.Join(lines, "\n")
 }
 
 func (m *tuiModel) renderContent(width, height int) string {
 	width = max(1, width)
 	height = max(1, height)
+	if m.createGroupMode {
+		return m.renderCreateGroupPanel(width, height)
+	}
+	if m.filterMode {
+		return m.renderTargetSearch(width, height)
+	}
+	if m.showAll {
+		return m.renderHelpPanel(width, height)
+	}
 	if len(m.rows) == 0 {
 		empty := m.styles.dimText.Render("No worktrees found. Create one with:")
 		hint := m.styles.metaValue.Render("  git worktree add ../branch-name")
 		return m.renderPanel("Worktrees", []string{empty, hint}, width, height, true)
 	}
 
-	if width < 88 {
+	if width < 96 {
 		if height < 8 {
-			if m.createGroupMode {
-				return m.renderCreateGroupPanel(width, height)
-			}
 			return m.renderDetailPanel(width, height)
 		}
-		usableHeight := height - 1
+		usableHeight := height
 		listHeight := (usableHeight * 2) / 5
-		listHeight = max(3, listHeight)
+		listHeight = min(max(8, listHeight), usableHeight-3)
 		detailHeight := usableHeight - listHeight
 		if detailHeight < 3 {
 			detailHeight = 3
 			listHeight = max(3, usableHeight-detailHeight)
 		}
-		left := m.renderListPanel(width, listHeight)
+		left := m.renderCompactListPanel(width, listHeight)
 		right := m.renderDetailPanel(width, detailHeight)
-		if m.createGroupMode {
-			right = m.renderCreateGroupPanel(width, detailHeight)
-		}
 		return lipgloss.JoinVertical(lipgloss.Left, left, right)
 	}
 
 	spacer := 1
 	usableWidth := max(2, width-spacer)
-	leftWidth := max(1, usableWidth/3)
+	leftWidth := min(46, max(30, usableWidth/3))
 	rightWidth := usableWidth - leftWidth
 	left := m.renderListPanel(leftWidth, height)
 	right := m.renderDetailPanel(rightWidth, height)
-	if m.createGroupMode {
-		right = m.renderCreateGroupPanel(rightWidth, height)
-	}
 	left = lipgloss.NewStyle().MarginRight(spacer).Render(left)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 }
@@ -209,10 +182,7 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 
 		var line1 string
 		if procBadge != "" {
-			nameW := lipgloss.Width(namePart)
-			badgeW := lipgloss.Width(procBadge)
-			gap := max(1, maxTextWidth-nameW-badgeW)
-			line1 = namePart + strings.Repeat(" ", gap) + m.styles.dimText.Render(procBadge)
+			line1 = headerRow(namePart, m.styles.dimText.Render(procBadge), maxTextWidth)
 		} else {
 			line1 = namePart
 		}
@@ -255,8 +225,8 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 		// Apply selection styling padded to full width for uniform highlight.
 		if i == m.idx {
 			sel := m.styles.selectedRow.Width(maxTextWidth)
-			line1 = sel.Render(line1)
-			line2 = sel.Render(line2)
+			line1 = sel.Render(truncateLine(ansi.Strip(line1), maxTextWidth))
+			line2 = sel.Render(truncateLine(ansi.Strip(line2), maxTextWidth))
 		}
 
 		lines = append(lines, line1, line2)
@@ -267,7 +237,49 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 		}
 	}
 
-	return m.renderPanel("Worktrees", lines, width, height, true)
+	title := fmt.Sprintf("Worktrees · %d/%d", m.idx+1, len(m.rows))
+	return m.renderPanel(title, lines, width, height, true)
+}
+
+// Compact rows keep several worktrees visible in stacked terminal layouts.
+func (m *tuiModel) renderCompactListPanel(width, height int) string {
+	capacity := max(1, height-4)
+	start := min(m.listOffset, max(0, len(m.rows)-capacity))
+	if m.idx < start {
+		start = m.idx
+	}
+	if m.idx >= start+capacity {
+		start = m.idx - capacity + 1
+	}
+	m.listOffset = max(0, start)
+	maxW := max(1, width-m.styles.panelBorder.GetHorizontalFrameSize())
+	lines := make([]string, 0, capacity)
+	for i := m.listOffset; i < min(len(m.rows), m.listOffset+capacity); i++ {
+		row := m.rows[i]
+		prefix := "  "
+		if i == m.idx {
+			prefix = "▸ "
+		}
+		state := "○"
+		if row.Prunable {
+			state = "!"
+		} else if row.Running && row.Exited {
+			state = "exited"
+		} else if row.Running {
+			state = "●"
+		}
+		name := row.Worktree
+		if row.Active {
+			name += " ★"
+		}
+		line := headerRow(prefix+name, state, maxW)
+		style := m.styles.row
+		if i == m.idx {
+			style = m.styles.selectedRow.Width(maxW)
+		}
+		lines = append(lines, style.Render(truncateLine(line, maxW)))
+	}
+	return m.renderPanel(fmt.Sprintf("Worktrees · %d/%d", m.idx+1, len(m.rows)), lines, width, height, true)
 }
 
 func visibleWorktreeRange(total, selected, offset, lineCapacity int) (int, int) {
@@ -358,9 +370,7 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 
 	// Output separator
 	label := " output "
-	if ok && target.Kind == model.TargetProcess {
-		label = " " + target.Name + " "
-	} else if ok {
+	if ok {
 		label = " " + target.Name + " "
 	}
 	sepW := max(0, maxW-lipgloss.Width(label))
@@ -384,7 +394,7 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 	} else if targetManaged {
 		hint = m.styles.dimText.Render("a attach tmux · r restart · x stop " + targetNoun)
 	} else if row.Running {
-		hint = m.styles.dimText.Render("s/↵ add " + targetNoun + " · a attach tmux · r restart · x stop")
+		hint = m.styles.dimText.Render("s/↵ add " + targetNoun)
 	} else {
 		hint = m.styles.dimText.Render("s/↵ start " + targetNoun)
 	}
@@ -415,8 +425,14 @@ func (m *tuiModel) renderDetailPanel(width, height int) string {
 					lines = append(lines, m.styles.logText.Render(truncateLine(l, maxW)))
 				}
 			}
-		} else if !row.Running {
-			lines = append(lines, m.styles.dimText.Render(targetNoun+" not running"))
+
+		}
+		if len(lines) < capacity-1 && (len(m.logLines) == 0 || !targetManaged || (target.Kind != model.TargetGroup && len(m.logLines[target.Name]) == 0)) {
+			empty := "Waiting for output…"
+			if !targetManaged {
+				empty = "Press enter to start this " + targetNoun
+			}
+			lines = append(lines, m.styles.dimText.Render(empty))
 		}
 	}
 
@@ -453,7 +469,7 @@ func (m *tuiModel) renderCreateGroupPanel(width, height int) string {
 	if len(processNames) == 0 {
 		lines = append(lines, m.styles.statusErr.Render("No processes available"))
 	} else {
-		memberCapacity := max(1, capacity-len(lines)-2)
+		memberCapacity := max(1, capacity-len(lines))
 		start := 0
 		if m.createGroupFocus == createGroupFocusMembers && m.createGroupCursor >= memberCapacity {
 			start = m.createGroupCursor - memberCapacity + 1
@@ -479,9 +495,6 @@ func (m *tuiModel) renderCreateGroupPanel(width, height int) string {
 		}
 	}
 
-	lines = append(lines, "")
-	lines = append(lines, m.styles.dimText.Render("tab switch focus · space toggle member · enter save · esc cancel"))
-
 	if len(lines) > capacity {
 		lines = lines[:capacity]
 	}
@@ -494,6 +507,7 @@ func (m *tuiModel) renderCreateGroupPanel(width, height int) string {
 }
 
 func (m *tuiModel) renderCreateGroupNameLine(maxW int) string {
+	m.createGroupInput.SetWidth(max(1, maxW-1))
 	line := m.createGroupInput.View()
 	if strings.TrimSpace(line) == "" {
 		line = m.styles.dimText.Render("group name")
@@ -530,6 +544,9 @@ func (m *tuiModel) renderPanel(title string, lines []string, width, height int, 
 }
 
 func renderBordered(style lipgloss.Style, lines []string, width, height int) string {
+	if width <= style.GetHorizontalFrameSize() || height <= style.GetVerticalFrameSize() {
+		return fitBlock(strings.Join(lines, "\n"), width, height)
+	}
 	innerWidth := max(1, width-style.GetHorizontalFrameSize())
 	innerHeight := max(1, height-style.GetVerticalFrameSize())
 	content := make([]string, 0, innerHeight)
@@ -546,12 +563,94 @@ func renderBordered(style lipgloss.Style, lines []string, width, height int) str
 }
 
 func (m *tuiModel) renderFooter(width int) string {
-	m.help.SetWidth(max(1, width-1))
-	helpView := m.help.ShortHelpView(m.keys.ShortHelp())
-	if m.showAll {
-		helpView = m.help.FullHelpView(m.keys.FullHelp())
+	text := "↑↓ worktree · ←→ target · enter start · / search · g group · ? help · q quit"
+	switch {
+	case m.loading:
+		text = "Working… · ctrl+c quit"
+	case m.createGroupMode:
+		text = "tab focus · ↑↓ move · space toggle · enter save · esc cancel"
+		if width < 72 {
+			text = "tab focus · space toggle · ↵ save · esc cancel"
+		}
+	case m.filterMode:
+		text = "↑↓ match · enter select · esc cancel"
+	case m.showAll:
+		text = "? close help · q quit"
+	case width < 72:
+		text = "↑↓ tree · ←→ target · ↵ start · ? help · q quit"
 	}
-	return " " + helpView
+	return truncateLine(" "+m.styles.footer.Render(text), width)
+}
+
+func (m *tuiModel) renderHelpPanel(width, height int) string {
+	lines := []string{}
+	for _, column := range m.keys.FullHelp() {
+		for _, binding := range column {
+			h := binding.Help()
+			lines = append(lines, fmt.Sprintf("%-8s %s", h.Key, h.Desc))
+		}
+	}
+	// Two balanced columns retain all shortcuts on ordinary 80x24 terminals.
+	if width >= 60 {
+		n := (len(lines) + 1) / 2
+		paired := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			line := lines[i]
+			if i+n < len(lines) {
+				line = lipgloss.NewStyle().Width((width-4)/2).Render(line) + lines[i+n]
+			}
+			paired = append(paired, line)
+		}
+		lines = paired
+	}
+	return m.renderPanel("Keyboard shortcuts", lines, width, height, false)
+}
+
+func (m *tuiModel) renderTargetSearch(width, height int) string {
+	maxW := max(1, width-m.styles.panelFocus.GetHorizontalFrameSize())
+	m.filterInput.SetWidth(max(1, maxW-3))
+	lines := []string{"/ " + m.filterInput.View(), ""}
+	var matches []int
+	selected := 0
+	query := strings.ToLower(m.filterInput.Value())
+	for i, target := range m.targets {
+		if strings.Contains(strings.ToLower(formatTargetLabel(target)), query) {
+			if i == m.targetIdx {
+				selected = len(matches)
+			}
+			matches = append(matches, i)
+		}
+	}
+	capacity := max(1, height-6)
+	start := max(0, selected-capacity+1)
+	for _, i := range matches[start:min(len(matches), start+capacity)] {
+		prefix := "  "
+		style := m.styles.row
+		if i == m.targetIdx {
+			prefix = "▸ "
+			style = m.styles.selectedRow
+		}
+		lines = append(lines, style.Render(truncateLine(prefix+formatTargetLabel(m.targets[i]), maxW)))
+	}
+	if len(matches) == 0 {
+		lines = append(lines, m.styles.dimText.Render("No matching targets. Try another name."))
+	}
+	return m.renderPanel(fmt.Sprintf("Search targets · %d matches", len(matches)), lines, width, height, true)
+}
+
+// fitBlock is a final guard for terminal dimensions, including very small sizes.
+func fitBlock(s string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, line := range lines {
+		lines[i] = truncateLine(line, width)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // --- Helpers ---
@@ -575,6 +674,7 @@ func truncateLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	s = strings.NewReplacer("\n", "↵", "\r", "", "\t", " ").Replace(s)
 	return ansi.Truncate(s, width, "…")
 }
 

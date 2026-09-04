@@ -39,13 +39,14 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 		m.loadingMsg = "switching " + formatTargetLabel(target) + " to " + name + "..."
 	}
 
+	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
 		opts := runOptionsForTarget(target)
 		var err error
 		if useAdditive {
-			err = m.rc.manager.Start(m.rc.context(), dir, opts)
+			err = manager.Start(ctx, dir, opts)
 		} else {
-			err = m.rc.manager.Switch(m.rc.context(), dir, opts)
+			err = manager.Switch(ctx, dir, opts)
 		}
 		if err != nil {
 			return actionErrMsg{err: err}
@@ -73,8 +74,9 @@ func (m *tuiModel) restartCurrentCmd() tea.Cmd {
 	m.loading = true
 	m.loadingDir = dir
 	m.loadingMsg = "restarting " + formatTargetLabel(target) + " in " + name + "..."
+	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
-		if err := m.rc.manager.Restart(m.rc.context(), dir, runOptionsForTarget(target)); err != nil {
+		if err := manager.Restart(ctx, dir, runOptionsForTarget(target)); err != nil {
 			return actionErrMsg{err: err}
 		}
 		return actionDoneMsg{text: "restarted " + formatTargetLabel(target) + " in " + name}
@@ -102,12 +104,13 @@ func (m *tuiModel) stopCurrentCmd() tea.Cmd {
 	m.loading = true
 	m.loadingDir = dir
 	m.loadingMsg = "stopping " + formatTargetLabel(target) + " in " + name + "..."
+	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
 		var err error
 		if target.Kind == model.TargetGroup {
-			err = m.rc.manager.StopGroup(m.rc.context(), dir, target.Name)
+			err = manager.StopGroup(ctx, dir, target.Name)
 		} else {
-			err = m.rc.manager.StopProcess(m.rc.context(), dir, target.Name)
+			err = manager.StopProcess(ctx, dir, target.Name)
 		}
 		if err != nil {
 			return actionErrMsg{err: err}
@@ -126,8 +129,9 @@ func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
 	m.loading = true
 	m.loadingDir = dir
 	m.loadingMsg = "stopping all in " + name + "..."
+	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
-		if err := m.rc.manager.StopWorktree(m.rc.context(), dir); err != nil {
+		if err := manager.StopWorktree(ctx, dir); err != nil {
 			return actionErrMsg{err: err}
 		}
 		return actionDoneMsg{text: "stopped all in " + name}
@@ -157,8 +161,9 @@ func (m *tuiModel) attachCurrentCmd() tea.Cmd {
 	m.loadingDir = dir
 	m.loadingMsg = "attaching " + formatTargetLabel(target) + " in " + name + "..."
 
+	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
-		spec, err := m.rc.manager.ResolveAttach(m.rc.context(), dir, runOptionsForTarget(target))
+		spec, err := manager.ResolveAttach(ctx, dir, runOptionsForTarget(target))
 		if err != nil {
 			return actionErrMsg{err: err}
 		}
@@ -170,17 +175,26 @@ func (m *tuiModel) attachCurrentCmd() tea.Cmd {
 // --- Log streaming ---
 
 func (m *tuiModel) fetchLogsCmd() tea.Cmd {
+	m.logRequest++
+	m.logPending = false
+	request := m.logRequest
 	row := m.current()
 	if row == nil {
 		return nil
 	}
 	dir := row.Dir
 	target, ok := m.selectedTarget()
+	if !ok {
+		m.logLines = nil
+		return nil
+	}
+	manager, ctx := m.rc.manager, m.rc.context()
+	m.logPending = true
 	return func() tea.Msg {
 		linesByTarget := map[string][]string{}
-		if ok && target.Kind == model.TargetGroup {
+		if target.Kind == model.TargetGroup {
 			for _, processName := range target.ProcessNames {
-				output, err := m.rc.manager.Logs(m.rc.context(), dir, processName, 200)
+				output, err := manager.Logs(ctx, dir, processName, 200)
 				if err != nil {
 					continue
 				}
@@ -190,23 +204,20 @@ func (m *tuiModel) fetchLogsCmd() tea.Cmd {
 				}
 				linesByTarget[processName] = strings.Split(raw, "\n")
 			}
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
+			return logsMsg{request: request, dir: dir, linesByTarget: linesByTarget}
 		}
 
-		processName := ""
-		if ok {
-			processName = target.Name
-		}
-		output, err := m.rc.manager.Logs(m.rc.context(), dir, processName, 200)
+		processName := target.Name
+		output, err := manager.Logs(ctx, dir, processName, 200)
 		if err != nil {
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
+			return logsMsg{request: request, dir: dir, linesByTarget: linesByTarget}
 		}
 		raw := strings.TrimRight(output, "\n")
 		if raw == "" {
-			return logsMsg{dir: dir, linesByTarget: linesByTarget}
+			return logsMsg{request: request, dir: dir, linesByTarget: linesByTarget}
 		}
 		linesByTarget[processName] = strings.Split(raw, "\n")
-		return logsMsg{dir: dir, linesByTarget: linesByTarget}
+		return logsMsg{request: request, dir: dir, linesByTarget: linesByTarget}
 	}
 }
 
@@ -219,14 +230,17 @@ func (m *tuiModel) scheduleLogRefresh() tea.Cmd {
 // --- Status refresh ---
 
 func (m *tuiModel) refreshStatusCmd() tea.Cmd {
+	m.statusRequest++
+	m.statusPending = true
+	request := m.statusRequest
+	manager, ctx, repoRoot := m.rc.manager, m.rc.context(), m.rc.repoRoot
 	return func() tea.Msg {
-		wts, err := gitwt.Discover(m.rc.repoRoot)
+		wts, err := gitwt.DiscoverContext(ctx, repoRoot)
 		if err != nil {
-			return statusRefreshedMsg{err: err}
+			return statusRefreshedMsg{request: request, err: err}
 		}
-		m.rc.manager.UpdateWorktrees(wts)
-		rows, err := m.rc.manager.Status(m.rc.context(), "")
-		return statusRefreshedMsg{rows: rows, worktrees: wts, err: err}
+		rows, err := manager.StatusForWorktrees(ctx, wts)
+		return statusRefreshedMsg{request: request, rows: rows, worktrees: wts, err: err}
 	}
 }
 
