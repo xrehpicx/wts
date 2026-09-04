@@ -8,14 +8,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/xrehpicx/wts/internal/config"
-	"github.com/xrehpicx/wts/internal/detect"
 	"github.com/xrehpicx/wts/internal/gitwt"
 	"github.com/xrehpicx/wts/internal/model"
 	"github.com/xrehpicx/wts/internal/runtime"
@@ -84,6 +85,10 @@ process or group in the target worktree.`,
   wts status --json
   wts tui
 `),
+		Args: cobra.NoArgs,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			a.in, a.out, a.err = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,7 +129,7 @@ func (a *app) runTUICommand(ctx context.Context) error {
 	}
 	return a.withRuntime(ctx, func(rc *runtimeContext) error {
 		m := newTUIModel(rc)
-		p := tea.NewProgram(m)
+		p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(a.in), tea.WithOutput(a.out))
 		finalModel, err := p.Run()
 		if err != nil {
 			return err
@@ -134,7 +139,8 @@ func (a *app) runTUICommand(ctx context.Context) error {
 				return tm.rc.manager.Attach(ctx, *tm.attachSpec)
 			}
 			if tm.quitInfo != "" {
-				_, _ = fmt.Fprint(a.out, tm.quitInfo)
+				_, err := fmt.Fprint(a.out, tm.quitInfo)
+				return err
 			}
 		}
 		return nil
@@ -151,11 +157,11 @@ func (a *app) withProject(fn func(*model.Project) error) error {
 
 func (a *app) withRuntime(ctx context.Context, fn func(*runtimeContext) error) error {
 	return a.withProject(func(project *model.Project) error {
-		repoRoot, err := resolveRepoRoot(project.RootDir)
+		repoRoot, err := resolveRepoRoot(ctx, project.RootDir)
 		if err != nil {
 			return err
 		}
-		worktrees, err := gitwt.Discover(repoRoot)
+		worktrees, err := gitwt.DiscoverContext(ctx, repoRoot)
 		if err != nil {
 			return err
 		}
@@ -183,8 +189,8 @@ func (a *app) newValidateCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withProject(func(p *model.Project) error {
-				_, _ = fmt.Fprintf(a.out, "config valid: %s (%d processes, %d groups)\n", p.ConfigPath, len(p.Processes), len(p.Groups))
-				return nil
+				_, err := fmt.Fprintf(a.out, "config valid: %s (%d processes, %d groups)\n", displayField(p.ConfigPath), len(p.Processes), len(p.Groups))
+				return err
 			})
 		},
 	}
@@ -205,10 +211,10 @@ func (a *app) newProcessesCmd() *cobra.Command {
 				tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
 				_, _ = fmt.Fprintln(tw, "TYPE\tNAME\tDETAIL")
 				for _, proc := range p.Processes {
-					_, _ = fmt.Fprintf(tw, "process\t%s\t%s\n", proc.Name, proc.Command)
+					_, _ = fmt.Fprintf(tw, "process\t%s\t%s\n", displayField(proc.Name), displayField(proc.Command))
 				}
 				for _, group := range p.Groups {
-					_, _ = fmt.Fprintf(tw, "group\t%s\t%s\n", group.Name, strings.Join(group.Processes, ", "))
+					_, _ = fmt.Fprintf(tw, "group\t%s\t%s\n", displayField(group.Name), displayField(strings.Join(group.Processes, ", ")))
 				}
 				return tw.Flush()
 			})
@@ -231,7 +237,7 @@ func (a *app) newListCmd() *cobra.Command {
 				tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
 				_, _ = fmt.Fprintln(tw, "WORKTREE\tBRANCH\tDIR")
 				for _, wt := range rc.manager.ListWorktrees() {
-					_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", wt.Name, wt.Branch, wt.Dir)
+					_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", displayField(wt.Name), displayField(wt.Branch), displayField(wt.Dir))
 				}
 				return tw.Flush()
 			})
@@ -286,15 +292,15 @@ its own tmux pane.`),
 					return err
 				}
 				target, _ := rc.project.ResolveTarget(opts.Process, opts.Group)
+				message := "✓ started %s in %s\n"
 				switch name {
-				case "start":
-					_, _ = fmt.Fprintf(a.out, "✓ started %s in %s\n", formatTargetLabel(target), args[0])
 				case "switch":
-					_, _ = fmt.Fprintf(a.out, "✓ switched %s to %s\n", formatTargetLabel(target), args[0])
+					message = "✓ switched %s to %s\n"
 				case "restart":
-					_, _ = fmt.Fprintf(a.out, "✓ restarted %s in %s\n", formatTargetLabel(target), args[0])
+					message = "✓ restarted %s in %s\n"
 				}
-				return nil
+				_, err := fmt.Fprintf(a.out, message, displayField(formatTargetLabel(target)), displayField(args[0]))
+				return err
 			})
 		},
 	}
@@ -388,8 +394,8 @@ func (a *app) cycleAndSwitch(ctx context.Context, delta int, opts runtime.RunOpt
 		if err := rc.manager.Switch(ctx, items[next].Dir, opts); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(a.out, "✓ switched to %s\n", items[next].Name)
-		return nil
+		_, err = fmt.Fprintf(a.out, "✓ switched to %s\n", displayField(items[next].Name))
+		return err
 	})
 }
 
@@ -412,7 +418,7 @@ func nextWorktreeIndex(items []gitwt.Worktree, activeDir string, delta int) int 
 		}
 		return 0
 	}
-	return (activeIdx + delta + len(items)) % len(items)
+	return (activeIdx + delta%len(items) + len(items)) % len(items)
 }
 
 func (a *app) newStopCmd() *cobra.Command {
@@ -453,29 +459,33 @@ With --all it stops all discovered worktree windows.`),
 					if err := rc.manager.StopAll(cmd.Context()); err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintln(a.out, "✓ stopped all worktrees")
+					_, err := fmt.Fprintln(a.out, "✓ stopped all worktrees")
+					return err
 				case len(args) == 1 && groupName != "":
 					if err := rc.manager.StopGroup(cmd.Context(), args[0], groupName); err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintf(a.out, "✓ stopped group %s in %s\n", groupName, args[0])
+					_, err := fmt.Fprintf(a.out, "✓ stopped group %s in %s\n", displayField(groupName), displayField(args[0]))
+					return err
 				case len(args) == 1 && proc != "":
 					if err := rc.manager.StopProcess(cmd.Context(), args[0], proc); err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintf(a.out, "✓ stopped %s in %s\n", proc, args[0])
+					_, err := fmt.Fprintf(a.out, "✓ stopped %s in %s\n", displayField(proc), displayField(args[0]))
+					return err
 				case len(args) == 1:
 					if err := rc.manager.StopWorktree(cmd.Context(), args[0]); err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintf(a.out, "✓ stopped %s\n", args[0])
+					_, err := fmt.Fprintf(a.out, "✓ stopped %s\n", displayField(args[0]))
+					return err
 				default:
 					if err := rc.manager.StopActive(cmd.Context()); err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintln(a.out, "✓ stopped active worktree")
+					_, err := fmt.Fprintln(a.out, "✓ stopped active worktree")
+					return err
 				}
-				return nil
 			})
 		},
 	}
@@ -524,8 +534,8 @@ func (a *app) newStatusCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					_, _ = fmt.Fprintln(a.out, string(payload))
-					return nil
+					_, err = fmt.Fprintln(a.out, string(payload))
+					return err
 				}
 				rows, err := rc.manager.Status(cmd.Context(), worktree)
 				if err != nil {
@@ -561,7 +571,7 @@ func (a *app) newStatusCmd() *cobra.Command {
 								m = " "
 							}
 							_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-								m, wtName, p.Name, status, branch, dir)
+								m, displayField(wtName), displayField(p.Name), status, displayField(branch), displayField(dir))
 						}
 					} else {
 						var status string
@@ -571,7 +581,7 @@ func (a *app) newStatusCmd() *cobra.Command {
 							status = "○ stopped"
 						}
 						_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-							marker, row.Worktree, row.Process, status, row.Branch, row.Dir)
+							marker, displayField(row.Worktree), displayField(row.Process), status, displayField(row.Branch), displayField(row.Dir))
 					}
 				}
 				return tw.Flush()
@@ -606,8 +616,8 @@ func (a *app) newLogsCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintln(a.out, output)
-				return nil
+				_, err = fmt.Fprintln(a.out, output)
+				return err
 			})
 		},
 	}
@@ -653,7 +663,7 @@ func (a *app) newPickCmd() *cobra.Command {
 				sort.Strings(labels)
 
 				picker := NewPicker(a.in, a.out, a.err)
-				selected, err := picker.Select(labels)
+				selected, err := picker.SelectContext(cmd.Context(), labels)
 				if err != nil {
 					return err
 				}
@@ -680,6 +690,11 @@ simultaneously in the same worktree as separate tmux panes, including every
 member of a configured group. Groups are defined in .wts.yaml and appear in the
 target selector as [group] <name>. Press g to create a group and save it back
 to the current repo's .wts.yaml.
+
+Search lists matching targets: use up/down to choose, enter to select, or esc to
+cancel. The group editor uses tab to change focus, space to toggle members, enter
+to save, and esc to cancel. Ctrl+c quits from any screen. Narrow terminals show a
+compact worktree list; errors stay visible on a separate header line.
 
 Shortcuts:
   j/↓      next worktree        h/←    prev target
@@ -720,18 +735,18 @@ func (a *app) newVersionCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if a.commit != "" {
-				_, _ = fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
-			} else {
-				_, _ = fmt.Fprintf(a.out, "wts %s\n", a.version)
+				_, err := fmt.Fprintf(a.out, "wts %s (%s)\n", a.version, a.commit)
+				return err
 			}
-			return nil
+			_, err := fmt.Fprintf(a.out, "wts %s\n", a.version)
+			return err
 		},
 	}
 }
 
-func resolveRepoRoot(startDir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	if strings.TrimSpace(startDir) != "" {
+func resolveRepoRoot(ctx context.Context, startDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	if startDir != "" {
 		cmd.Dir = startDir
 	}
 	out, err := cmd.CombinedOutput()
@@ -740,9 +755,10 @@ func resolveRepoRoot(startDir string) (string, error) {
 		if msg == "" {
 			return "", fmt.Errorf("resolve git repo root: %w", err)
 		}
-		return "", fmt.Errorf("resolve git repo root: %s", msg)
+		return "", fmt.Errorf("resolve git repo root: %s: %w", msg, err)
 	}
-	root := strings.TrimSpace(string(out))
+	// Git terminates the path with a newline; whitespace can be part of the path.
+	root := strings.TrimSuffix(string(out), "\n")
 	if root == "" {
 		return "", fmt.Errorf("resolve git repo root: empty path")
 	}
@@ -753,131 +769,17 @@ func resolveRepoRoot(startDir string) (string, error) {
 	return abs, nil
 }
 
-func (a *app) newInitCmd() *cobra.Command {
-	var (
-		force  bool
-		dir    string
-		dryRun bool
-	)
-	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Generate .wts.yaml by detecting project type",
-		Long: strings.TrimSpace(`
-Inspect the current (or specified) directory, detect the project type, and
-generate a .wts.yaml with inferred processes.
-
-Built-in detectors:
-  nodejs     package.json scripts (auto-detects npm/pnpm/yarn/bun)
-  go         cmd/ sub-directories or go run .
-  python     manage.py (Django) or pyproject.toml / requirements.txt
-  makefile   Makefile targets
-
-Custom detectors can be added as YAML files in:
-  ~/.config/wts/detectors/
-
-See 'wts init --help' or docs/detectors.md for the file format.`),
-		Example: strings.TrimSpace(`
-  wts init
-  wts init --dir ../my-project
-  wts init --force
-  wts init --dry-run
-`),
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			targetDir := dir
-			if targetDir == "" {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return fmt.Errorf("resolve working directory: %w", err)
-				}
-				targetDir = cwd
-			}
-			abs, err := filepath.Abs(targetDir)
-			if err != nil {
-				return fmt.Errorf("resolve path: %w", err)
-			}
-			targetDir = abs
-
-			outPath := filepath.Join(targetDir, config.DefaultConfigFile)
-			if !force && !dryRun {
-				if _, err := os.Stat(outPath); err == nil {
-					return fmt.Errorf("%s already exists (use --force to overwrite)", config.DefaultConfigFile)
-				} else if !os.IsNotExist(err) {
-					return fmt.Errorf("inspect existing config: %w", err)
-				}
-			}
-
-			configDir := detect.ConfigDir()
-			result, err := detect.Run(targetDir, configDir)
-			if err != nil {
-				return fmt.Errorf("detection failed: %w", err)
-			}
-
-			var procs []model.Process
-			detectedType := "unknown"
-			if result != nil {
-				detectedType = result.Type
-				for _, p := range result.Processes {
-					procs = append(procs, model.Process{
-						Name:    p.Name,
-						Command: p.Command,
-					})
-				}
-			}
-			if len(procs) == 0 {
-				procs = append(procs, model.Process{
-					Name:    "dev",
-					Command: "echo 'replace with your dev command'",
-				})
-			}
-
-			cfg := model.Config{
-				Version: model.CurrentVersion,
-				Defaults: model.Defaults{
-					StopTimeoutSec: model.DefaultStopTimeout,
-					Shell:          model.DefaultShell,
-				},
-				Processes: procs,
-			}
-
-			yamlData, err := config.Marshal(cfg)
-			if err != nil {
-				return fmt.Errorf("marshal config: %w", err)
-			}
-
-			if result != nil {
-				_, _ = fmt.Fprintf(a.out, "✓ Detected %s project (%d processes)\n", detectedType, len(procs))
-			} else {
-				_, _ = fmt.Fprintln(a.out, "  No project type detected — generating minimal config")
-			}
-
-			if dryRun {
-				_, _ = fmt.Fprintf(a.out, "\n%s", string(yamlData))
-				return nil
-			}
-
-			if _, err := config.Save(outPath, cfg); err != nil {
-				return fmt.Errorf("write config: %w", err)
-			}
-			_, _ = fmt.Fprintf(a.out, "  Written %s\n", outPath)
-
-			tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(tw, "\n  PROCESS\tCOMMAND")
-			for _, p := range procs {
-				_, _ = fmt.Fprintf(tw, "  %s\t%s\n", p.Name, p.Command)
-			}
-			return tw.Flush()
-		},
-	}
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing "+config.DefaultConfigFile)
-	cmd.Flags().StringVar(&dir, "dir", "", "project directory (default: current working directory)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print generated config without writing")
-	return cmd
-}
-
 func worktreeLabel(wt gitwt.Worktree) string {
 	if wt.Branch == "" {
-		return fmt.Sprintf("%s  (%s)", wt.Name, wt.Dir)
+		return fmt.Sprintf("%s  (%s)", displayField(wt.Name), displayField(wt.Dir))
 	}
-	return fmt.Sprintf("%s [%s]  (%s)", wt.Name, wt.Branch, wt.Dir)
+	return fmt.Sprintf("%s [%s]  (%s)", displayField(wt.Name), displayField(wt.Branch), displayField(wt.Dir))
+}
+
+// displayField keeps terminal controls and table delimiters in names visible.
+func displayField(value string) string {
+	if strings.ContainsAny(value, "\\\"") || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsControl(r) }) {
+		return strconv.Quote(value)
+	}
+	return value
 }

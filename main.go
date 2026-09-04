@@ -14,8 +14,18 @@ var (
 )
 
 func main() {
+	info, _ := debug.ReadBuildInfo()
+	buildVersion, buildCommit := buildMetadata(version, commit, info)
+	if err := cli.Execute(buildVersion, buildCommit); err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(1)
+	}
+}
+
+// buildMetadata prefers release flags, falling back to Go's embedded module metadata.
+func buildMetadata(version, commit string, info *debug.BuildInfo) (string, string) {
 	version = strings.TrimPrefix(version, "v")
-	if info, ok := debug.ReadBuildInfo(); ok {
+	if info != nil {
 		// go install sets Main.Version to the module version (e.g. v0.2.1)
 		if version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
 			version = strings.TrimPrefix(info.Main.Version, "v")
@@ -33,8 +43,5 @@ func main() {
 			}
 		}
 	}
-	if err := cli.Execute(version, commit); err != nil {
-		_, _ = os.Stderr.WriteString(err.Error() + "\n")
-		os.Exit(1)
-	}
+	return version, commit
 }

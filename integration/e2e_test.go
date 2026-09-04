@@ -33,7 +33,7 @@ func TestCLIManagesProcessesAcrossRealGitWorktrees(t *testing.T) {
 	repoRoot := filepath.Dir(filepath.Dir(thisFile))
 	temp := t.TempDir()
 	projectDir := filepath.Join(temp, "project.with.dot")
-	featureDir := filepath.Join(temp, "project.with.dot-feature")
+	featureDir := filepath.Join(temp, "project.with.dot-feature with spaces")
 	if err := os.Mkdir(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
