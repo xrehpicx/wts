@@ -13,6 +13,11 @@ member of a configured group. Groups are defined in .wts.yaml and appear in the
 target selector as [group] <name>. Press g to create a group and save it back
 to the current repo's .wts.yaml.
 
+Search lists matching targets: use up/down to choose, enter to select, or esc to
+cancel. The group editor uses tab to change focus, space to toggle members, enter
+to save, and esc to cancel. Ctrl+c quits from any screen. Narrow terminals show a
+compact worktree list; errors stay visible on a separate header line.
+
 Shortcuts:
   j/↓      next worktree        h/←    prev target
   k/↑      prev worktree        l/→    next target

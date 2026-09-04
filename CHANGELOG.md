@@ -6,6 +6,22 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-05
+
+### Improved
+
+- Compact worktree lists on narrow terminals, full-area target search and group
+  editing, readable secondary text, consistent selection highlighting, and
+  context-specific keyboard help
+- Selected worktree and target are explicit in the header; errors have a dedicated
+  row, target changes refresh logs immediately, and group logs use spare space
+- Regression tests for editor state, stale asynchronous replies, terminal bounds,
+  shell programs, picker cancellation, unusual paths, and release retries
+- Real Git and isolated tmux tests, including compound commands and pane identity;
+  raised the enforced total coverage floor from 40% to 60%
+- Split initialization and TUI editing into focused modules; preserve command
+  cancellation, caller-provided streams, and output errors
+
 ### Added
 
 - Cross-platform push and pull-request CI with race-tested coverage, linting,
@@ -22,6 +38,23 @@ The format is based on Keep a Changelog and this project follows SemVer.
 - Hardened configuration, detector, tmux, runtime, and release error handling
 
 ### Fixed
+
+- Compound shell commands, loops, and assignments execute completely instead of
+  being cut short by an implicit `exec`
+- Graceful shutdown interrupts live child processes even when tmux reports a shell;
+  pane metadata takes precedence over mutable titles
+- Background refreshes cannot overwrite newer TUI results or mutate the current
+  worktree inventory; group saves cannot be submitted twice
+- Search can select every matching target and preserves the prior target when no
+  result is chosen; `ctrl+c` works in editors
+- Picker cancellation no longer opens a fallback prompt; EOF input and paths with
+  whitespace or control characters are handled correctly
+- Bare and prunable worktrees are rejected before stopping the active worktree;
+  invalid NUL execution values are rejected during configuration validation
+- Makefile detection follows GNU Make file precedence and skips variable assignments;
+  Django detection honors uv and Poetry environments
+- Release requests now publish assets, pin the tested commit and exact tag, ignore
+  demo tags, serialize publication, and retry missing or draft releases safely
 
 - Restarting the only managed process no longer tries to split a removed tmux window
 - Exited processes are replaced on start instead of being treated as healthy

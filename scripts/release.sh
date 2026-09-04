@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+bump=${1:-patch}
+case "$bump" in
+  patch|minor) ;;
+  *) echo "Version bump must be patch or minor." >&2; exit 1 ;;
+esac
+
 branch=$(git branch --show-current)
 if [ "$branch" != "main" ]; then
   echo "Releases must be created from main (current branch: ${branch:-detached})." >&2
@@ -12,32 +18,16 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-git fetch --force --tags origin
-
-if latest=$(git describe --tags --abbrev=0 2>/dev/null); then
-  commits_since=$(git rev-list "${latest}..HEAD" --count)
-else
-  latest="v0.0.0"
-  commits_since=$(git rev-list HEAD --count)
-fi
-
-if [ "$commits_since" = "0" ]; then
-  echo "No changes since ${latest} — nothing to release."
-  exit 0
-fi
-
-if ! [[ "$latest" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  echo "Latest tag is not semantic versioning compatible: $latest" >&2
+command -v gh >/dev/null || { echo "Install and authenticate the GitHub CLI (gh) before releasing." >&2; exit 1; }
+git fetch --tags origin main:refs/remotes/origin/main
+revision=$(git rev-parse HEAD)
+if [ "$revision" != "$(git rev-parse refs/remotes/origin/main)" ]; then
+  echo "Local main must match origin/main. Push or update main before releasing." >&2
   exit 1
 fi
 
-IFS='.' read -r major minor patch <<< "${latest#v}"
-patch=$((patch + 1))
-next="v${major}.${minor}.${patch}"
-
-git tag -a "${next}" -m "Release ${next}"
-git push origin main "${next}"
-
-echo ""
-echo "Released ${next} (${commits_since} commits since ${latest})"
-echo "Install:  go install github.com/xrehpicx/wts@latest"
+# The workflow rechecks this revision before tagging, so a concurrent push cannot
+# silently change the code that was requested for release.
+gh workflow run release.yml --ref main -f "bump=$bump" -f "revision=$revision"
+echo "Release workflow requested for $revision ($bump)."
+echo "Follow publication with: gh run list --workflow release.yml"

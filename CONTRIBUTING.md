@@ -32,3 +32,16 @@ Use Conventional Commits, e.g.:
 - `feat: add hello --upper flag`
 - `fix: handle unknown command exit code`
 - `docs: improve make workflow section`
+
+## Verification and publication
+
+Run `make airflow` for formatting, dependency checks, static analysis,
+race-tested coverage (minimum 60%), vulnerability scanning, and a production build.
+Run `make test-e2e` with Git and tmux installed to verify real process handoff.
+Release script tests use temporary Git repositories and a stub GitHub CLI, so they
+need no credentials or network. Run `make docs` after changing command help.
+
+Maintainers release a clean, pushed `main` with `make release` (patch) or
+`make release BUMP=minor`. The GitHub workflow verifies the requested revision and
+publishes binaries and checksums for that exact commit. Check the workflow result
+before announcing the release.

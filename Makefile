@@ -2,13 +2,13 @@ APP_NAME := wts
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP_NAME)
 GO := go
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(shell git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --always --dirty 2>/dev/null || echo dev)
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 GOIMPORTS := $(GO) run golang.org/x/tools/cmd/goimports@v0.48.0
 GOVULNCHECK := $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.6.0
-COVERAGE_MIN ?= 40
+COVERAGE_MIN ?= 60
 
 # Allow: make run tui / make run switch demo-local
 ifeq ($(firstword $(MAKECMDGOALS)),run)
@@ -80,5 +80,6 @@ install: ## Install binary in GOPATH/bin
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) coverage.out
 
-release: airflow ## Bump patch version, tag, and push (skip if no changes since last tag)
-	@scripts/release.sh
+BUMP ?= patch
+release: airflow ## Publish verified main through GitHub Actions (BUMP=patch or minor)
+	@scripts/release.sh "$(BUMP)"

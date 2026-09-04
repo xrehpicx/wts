@@ -31,6 +31,8 @@ changelog:
   use: github-native
 
 release:
+  use_existing_draft: true
+  replace_existing_artifacts: true
   github:
     owner: xrehpicx
     name: wts
