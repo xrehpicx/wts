@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ type mockBackend struct {
 	attachCalls        []AttachSpec
 	listPanesErr       error
 	ensureSessionCount int
+	nextPaneID         int
 }
 
 func newMockBackend() *mockBackend {
@@ -46,7 +48,8 @@ func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ 
 	m.windows[window] = true
 	m.startCount[window]++
 	if paneTitle != "" {
-		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Process: tmux.ProcessFromPaneTitle(paneTitle), Title: paneTitle, PID: "1000", Command: "node"}}
+		m.panes[window] = []tmux.PaneInfo{{ID: fmt.Sprintf("%%%d", m.nextPaneID), Process: tmux.ProcessFromPaneTitle(paneTitle), Title: paneTitle, PID: fmt.Sprint(1000 + m.nextPaneID), Command: "node"}}
+		m.nextPaneID++
 	}
 	return nil
 }
@@ -92,12 +95,13 @@ func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) e
 	return nil
 }
 func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ string, _ map[string]string, paneTitle string) error {
-	id := len(m.panes[window])
+	id := m.nextPaneID
+	m.nextPaneID++
 	m.panes[window] = append(m.panes[window], tmux.PaneInfo{
-		ID:      "%" + string(rune('0'+id)),
+		ID:      fmt.Sprintf("%%%d", id),
 		Process: tmux.ProcessFromPaneTitle(paneTitle),
 		Title:   paneTitle,
-		PID:     "100" + string(rune('0'+id)),
+		PID:     fmt.Sprint(1000 + id),
 		Command: "node",
 	})
 	m.startCount[window]++
@@ -968,5 +972,73 @@ func TestStartWithAttachFocusesSelectedProcessPane(t *testing.T) {
 	}
 	if backend.attachCalls[0].PaneID != "%0" {
 		t.Fatalf("expected attach to focus api pane, got %q", backend.attachCalls[0].PaneID)
+	}
+}
+
+func TestProcessMetadataOverridesConflictingTitle(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.windows[window] = true
+	backend.panes[window] = []tmux.PaneInfo{{ID: "%0", Process: "api", Title: "wts:web", PID: "1000", Command: "node"}}
+	if err := manager.StopProcess(context.Background(), "repo-main", "web"); err == nil {
+		t.Fatal("must not stop api using its overwritten title")
+	}
+	if len(backend.panes[window]) != 1 {
+		t.Fatal("api pane was removed")
+	}
+}
+
+func TestLegacyPaneDoesNotMatchEveryProcess(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	window := tmux.WindowName("/tmp/repo-main")
+	backend.windows[window] = true
+	backend.panes[window] = []tmux.PaneInfo{{ID: "%0", Title: "sh", PID: "1000", Command: "node"}}
+	if err := manager.Start(context.Background(), "repo-main", RunOptions{Process: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.panes[window]) != 2 {
+		t.Fatal("starting web should add a pane beside the legacy default process")
+	}
+}
+
+func TestSwitchRejectsUnavailableWorktreeBeforeStoppingActive(t *testing.T) {
+	t.Parallel()
+	for _, unavailable := range []gitwt.Worktree{
+		{Name: "unavailable", Dir: "/tmp/unavailable", Bare: true},
+		{Name: "unavailable", Dir: "/tmp/unavailable", Prunable: true},
+	} {
+		backend := newMockBackend()
+		manager := NewManager(testProject(), "/tmp/repo-main", append(testWorktrees(), unavailable), backend)
+		ctx := context.Background()
+		if err := manager.Start(ctx, "repo-main", RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Switch(ctx, "unavailable", RunOptions{}); err == nil {
+			t.Fatal("expected unavailable worktree error")
+		}
+		if !backend.windows[tmux.WindowName("/tmp/repo-main")] {
+			t.Fatal("failed switch stopped active worktree")
+		}
+	}
+}
+
+func TestStatusForWorktreesDoesNotReplaceAcceptedInventory(t *testing.T) {
+	t.Parallel()
+	backend := newMockBackend()
+	manager := NewManager(testProject(), "/tmp/repo-main", testWorktrees(), backend)
+	stale := []gitwt.Worktree{{Name: "stale", Dir: "/tmp/stale"}}
+	rows, err := manager.StatusForWorktrees(context.Background(), stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Worktree != "stale" {
+		t.Fatalf("unexpected snapshot rows: %#v", rows)
+	}
+	if items := manager.ListWorktrees(); len(items) != 2 || items[0].Name == "stale" {
+		t.Fatalf("background snapshot replaced manager inventory: %#v", items)
 	}
 }

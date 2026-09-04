@@ -380,3 +380,47 @@ processes:
 		t.Fatal("expected invalid custom detector error")
 	}
 }
+
+func TestMakefileDetectorIgnoresAssignments(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Makefile"), []byte("NAME := value\nOTHER::=value\nserve:\n\t@echo ready\n"))
+	result, err := (&MakefileDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || len(result.Processes) != 1 || result.Processes[0].Name != "serve" {
+		t.Fatalf("unexpected targets: %#v", result)
+	}
+}
+
+func TestMakefileDetectorUsesMakeFilePrecedence(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "GNUmakefile"), []byte("serve:\n\t@echo ready\n"))
+	writeFile(t, filepath.Join(dir, "Makefile"), []byte("wrong:\n\t@echo wrong\n"))
+	result, err := (&MakefileDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || len(result.Processes) != 1 || result.Processes[0].Name != "serve" {
+		t.Fatalf("unexpected targets: %#v", result)
+	}
+}
+
+func TestPythonDetectorDjangoUsesProjectEnvironment(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "manage.py"), []byte(""))
+	writeFile(t, filepath.Join(dir, "uv.lock"), []byte(""))
+	result, err := (&PythonDetector{}).Detect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Type != "python-django" {
+		t.Fatalf("expected standalone manage.py detection, got %#v", result)
+	}
+	if result.Processes[0].Command != "uv run python manage.py runserver" {
+		t.Fatalf("Django command bypasses environment: %q", result.Processes[0].Command)
+	}
+}

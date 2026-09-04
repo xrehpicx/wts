@@ -185,8 +185,12 @@ func normalizeAndValidate(cfg *model.Config) error {
 	if cfg.Defaults.StopTimeoutSec < 1 || cfg.Defaults.StopTimeoutSec > 120 {
 		return fmt.Errorf("defaults.stop_timeout_sec must be between 1 and 120")
 	}
-	if strings.TrimSpace(cfg.Defaults.Shell) == "" {
+	cfg.Defaults.Shell = strings.TrimSpace(cfg.Defaults.Shell)
+	if cfg.Defaults.Shell == "" {
 		cfg.Defaults.Shell = model.DefaultShell
+	}
+	if strings.ContainsRune(cfg.Defaults.Shell, '\x00') {
+		return fmt.Errorf("defaults.shell must not contain NUL characters")
 	}
 
 	if len(cfg.Processes) == 0 {
@@ -237,12 +241,19 @@ func normalizeProcess(proc *model.Process) error {
 		return fmt.Errorf("command is required")
 	}
 
+	if strings.ContainsRune(proc.Command, '\x00') {
+		return fmt.Errorf("command must not contain NUL characters")
+	}
+
 	if proc.Env == nil {
 		proc.Env = map[string]string{}
 	}
-	for key := range proc.Env {
+	for key, value := range proc.Env {
 		if !environmentNamePattern.MatchString(key) {
 			return fmt.Errorf("environment variable name %q is invalid", key)
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("environment variable %q must not contain NUL characters", key)
 		}
 	}
 	return nil

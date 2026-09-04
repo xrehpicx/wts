@@ -12,7 +12,7 @@ type PythonDetector struct{}
 func (d *PythonDetector) Name() string { return "python" }
 
 func (d *PythonDetector) Detect(dir string) (*Result, error) {
-	markers := []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}
+	markers := []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "manage.py"}
 	found := false
 	for _, m := range markers {
 		exists, err := regularFileExists(filepath.Join(dir, m))
@@ -29,6 +29,10 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 	}
 
 	var procs []Process
+	prefix, err := pythonCommandPrefix(dir)
+	if err != nil {
+		return nil, err
+	}
 
 	manageExists, err := regularFileExists(filepath.Join(dir, "manage.py"))
 	if err != nil {
@@ -37,19 +41,15 @@ func (d *PythonDetector) Detect(dir string) (*Result, error) {
 	if manageExists {
 		procs = append(procs, Process{
 			Name:    "runserver",
-			Command: "python manage.py runserver",
+			Command: prefix + "python manage.py runserver",
 		})
 		procs = append(procs, Process{
 			Name:    "test",
-			Command: "python manage.py test",
+			Command: prefix + "python manage.py test",
 		})
 		return &Result{Type: "python-django", Processes: procs}, nil
 	}
 
-	prefix, err := pythonCommandPrefix(dir)
-	if err != nil {
-		return nil, err
-	}
 	runCmd, err := pythonRunCommand(dir, prefix)
 	if err != nil {
 		return nil, err

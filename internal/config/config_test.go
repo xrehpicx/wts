@@ -326,3 +326,43 @@ func TestSaveNewConfigUsesPrivatePermissions(t *testing.T) {
 		t.Fatalf("new config mode = %o; want 600", got)
 	}
 }
+
+func TestMarshalRejectsNULInProcessExecutionValues(t *testing.T) {
+	t.Parallel()
+	for _, field := range []string{"shell", "command", "environment"} {
+		t.Run(field, func(t *testing.T) {
+			cfg := model.Config{Version: model.CurrentVersion, Processes: []model.Process{{Name: "api", Command: "echo ok"}}}
+			switch field {
+			case "shell":
+				cfg.Defaults.Shell = "/bin/sh\x00"
+			case "command":
+				cfg.Processes[0].Command = "echo\x00ok"
+			case "environment":
+				cfg.Processes[0].Env = map[string]string{"VALUE": "bad\x00value"}
+			}
+			if _, err := Marshal(cfg); err == nil {
+				t.Fatal("expected NUL validation error before invoking tmux")
+			}
+		})
+	}
+}
+
+func TestSavePreservesFileAndCallerOnValidationFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), DefaultConfigFile)
+	original := []byte("existing config\n")
+	if err := os.WriteFile(path, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg := model.Config{Version: model.CurrentVersion, Processes: []model.Process{{Name: " api ", Command: " "}}}
+	if _, err := Save(path, cfg); err == nil {
+		t.Fatal("expected invalid command error")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("failed save changed original: %q, %v", data, err)
+	}
+	if cfg.Processes[0].Name != " api " {
+		t.Fatal("failed save mutated caller configuration")
+	}
+}

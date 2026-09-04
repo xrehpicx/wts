@@ -1,6 +1,10 @@
 package gitwt
 
 import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -79,5 +83,69 @@ func TestParsePorcelainNULPreservesUnusualPathCharacters(t *testing.T) {
 	}
 	if items[0].Dir != filepath.Clean(dir) {
 		t.Fatalf("path changed during parse: got %q; want %q", items[0].Dir, filepath.Clean(dir))
+	}
+}
+
+func TestParsePorcelainNULPreservesTrailingCarriageReturn(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "worktree\r")
+	items, err := parsePorcelain([]byte("worktree " + dir + "\x00HEAD abc\x00prunable\x00\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Dir != dir || !items[0].Prunable {
+		t.Fatalf("unexpected parsed worktree: %#v", items)
+	}
+}
+
+func TestResolvePreservesWhitespaceInPaths(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "tree ")
+	items := []Worktree{{Name: "tree ", Dir: dir}}
+	for _, selector := range []string{dir, "tree "} {
+		if _, err := Resolve(items, selector); err != nil {
+			t.Fatalf("resolve %q: %v", selector, err)
+		}
+	}
+}
+
+func TestDiscoverContextWithRealWorktrees(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=WTS Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	run("commit", "--allow-empty", "-m", "initial")
+	worktree := filepath.Join(dir, "feature with space\nand newline\r")
+	run("worktree", "add", "-b", "feature", worktree)
+	items, err := DiscoverContext(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Git resolves macOS /var and /tmp symlinks in its porcelain output.
+	canonical, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := Resolve(items, canonical)
+	if err != nil || wt.Branch != "feature" {
+		t.Fatalf("discover unusual path: %#v, %v", wt, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := DiscoverContext(ctx, repo); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled discovery = %v", err)
 	}
 }

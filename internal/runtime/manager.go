@@ -172,6 +172,12 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 	if err != nil {
 		return err
 	}
+	if wt.Bare {
+		return fmt.Errorf("worktree %q is a bare repository and cannot run processes", wt.Name)
+	}
+	if wt.Prunable {
+		return fmt.Errorf("worktree %q is unavailable; prune or repair it before starting processes", wt.Name)
+	}
 	target, err := m.resolveTarget(opts)
 	if err != nil {
 		return err
@@ -343,14 +349,35 @@ func (m *Manager) findProcessPane(ctx context.Context, wt *gitwt.Worktree, proce
 	}
 	// Fallback: match by pane title.
 	for i := range panes {
-		if panes[i].Title == title {
+		if strings.TrimSpace(panes[i].Process) == "" && panes[i].Title == title {
 			return &panes[i], nil
 		}
 	}
 	// Fallback: legacy pane without wts: prefix (started before multi-process).
 	// Only match if there's exactly one pane with no identity at all.
 	if len(panes) == 1 && strings.TrimSpace(panes[0].Process) == "" && tmux.ProcessFromPaneTitle(panes[0].Title) == "" {
-		return &panes[0], nil
+		legacyName, err := m.backend.GetSessionOption(ctx, m.session, tmux.ProcessOptionKey(wt.Dir))
+		if err != nil {
+			return nil, err
+		}
+		if legacyName == "" {
+			activeDir, err := m.backend.GetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey())
+			if err != nil {
+				return nil, err
+			}
+			if activeDir != "" && filepath.Clean(activeDir) == filepath.Clean(wt.Dir) {
+				legacyName, err = m.backend.GetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey())
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if legacyName == "" {
+			legacyName = m.defaultProcessName()
+		}
+		if legacyName == processName {
+			return &panes[0], nil
+		}
 	}
 	return nil, nil
 }
@@ -556,6 +583,19 @@ func (m *Manager) Logs(ctx context.Context, worktree string, processName string,
 	return m.backend.CapturePane(ctx, m.session, tmux.WindowName(wt.Dir), lines)
 }
 
+// StatusForWorktrees reads status for a discovery snapshot without changing the
+// manager's worktree inventory. Background refreshes can finish out of order;
+// callers should update the inventory only after accepting a refresh result.
+func (m *Manager) StatusForWorktrees(ctx context.Context, worktrees []gitwt.Worktree) ([]StatusRow, error) {
+	snapshot := &Manager{
+		project:   m.project,
+		backend:   m.backend,
+		session:   m.session,
+		worktrees: append([]gitwt.Worktree(nil), worktrees...),
+	}
+	return snapshot.Status(ctx, "")
+}
+
 func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, error) {
 	if err := m.ensureReady(ctx); err != nil {
 		return nil, err
@@ -611,16 +651,11 @@ func (m *Manager) Status(ctx context.Context, worktree string) ([]StatusRow, err
 			if len(panes) > 0 {
 				groupMatchCount := map[string]int{}
 				for _, pane := range panes {
-					resolvedFromPane := false
 					procName := strings.TrimSpace(pane.Process)
 					if procName == "" {
 						procName = tmux.ProcessFromPaneTitle(pane.Title)
-					} else {
-						resolvedFromPane = true
 					}
-					if procName != "" && !resolvedFromPane {
-						resolvedFromPane = true
-					}
+					resolvedFromPane := procName != ""
 					if procName == "" {
 						// Legacy pane without wts title — use active process as fallback.
 						if active && activeProc != "" {

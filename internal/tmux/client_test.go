@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestBuildPayloadSortsAndQuotesEnvironment(t *testing.T) {
 		"Z_LAST":  "plain",
 		"A_FIRST": "it's safe",
 	})
-	want := `export A_FIRST='it'"'"'s safe'; export Z_LAST='plain'; exec go run .`
+	want := `export A_FIRST='it'"'"'s safe'; export Z_LAST='plain'; go run .`
 	if got != want {
 		t.Fatalf("buildPayload() = %q; want %q", got, want)
 	}
@@ -233,5 +234,79 @@ func TestStopPaneClosesAsSoonAsCommandReturnsToShell(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("stop waited for timeout after command exit: %v", elapsed)
+	}
+}
+
+func TestBuildPayloadPreservesShellPrograms(t *testing.T) {
+	t.Parallel()
+	for _, command := range []string{
+		`printf first; printf second`,
+		`printf first && printf second`,
+		`VALUE=first; printf '%s' "$VALUE"; printf second`,
+		`for part in first second; do printf '%s' "$part"; done`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			out, err := exec.Command("/bin/sh", "-c", buildPayload(command, nil)).CombinedOutput()
+			if err != nil || string(out) != "firstsecond" {
+				t.Fatalf("shell program = %q, %v; want firstsecond", out, err)
+			}
+		})
+	}
+}
+
+func TestExecRunnerPreservesLogWhitespace(t *testing.T) {
+	t.Parallel()
+	out, err := (execRunner{}).Run(context.Background(), "/bin/sh", "-c", `printf '  indented\n\n'`)
+	if err != nil || out != "  indented\n\n" {
+		t.Fatalf("output = %q, %v; want original whitespace", out, err)
+	}
+}
+
+func TestStopShellCommandWaitsForLiveChildren(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []string{"pane", "window"} {
+		t.Run(scope, func(t *testing.T) {
+			interrupted, killed := false, false
+			client := NewClient("tmux")
+			client.runner = runnerFunc(func(_ context.Context, name string, args ...string) (string, error) {
+				if name == "pgrep" {
+					if !interrupted {
+						return "456", nil
+					}
+					return "", nil
+				}
+				switch args[0] {
+				case "display-message":
+					return "123\t0\tsh", nil
+				case "list-panes":
+					return "%1\tapi\twts:api\t123\tsh\t0", nil
+				case "send-keys":
+					interrupted = true
+				case "kill-pane", "kill-window":
+					killed = true
+				}
+				return "", nil
+			})
+			var err error
+			if scope == "pane" {
+				err = client.StopPane(context.Background(), "%1", time.Second)
+			} else {
+				err = client.StopWindow(context.Background(), "session", "window", time.Second)
+			}
+			if err != nil || !interrupted || !killed {
+				t.Fatalf("stop %s: interrupted=%v killed=%v err=%v", scope, interrupted, killed, err)
+			}
+		})
+	}
+}
+
+func TestGetSessionOptionPreservesPathWhitespace(t *testing.T) {
+	t.Parallel()
+	want := "/tmp/worktree \n"
+	client := NewClient("tmux")
+	client.runner = runnerFunc(func(context.Context, string, ...string) (string, error) { return want + "\n", nil })
+	got, err := client.GetSessionOption(context.Background(), "session", ActiveWorktreeOptionKey())
+	if err != nil || got != want {
+		t.Fatalf("option = %q, %v; want %q", got, err, want)
 	}
 }

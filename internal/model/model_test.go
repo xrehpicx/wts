@@ -46,3 +46,22 @@ func TestConfigReturnsDeepCopy(t *testing.T) {
 		t.Fatalf("project group mutated through Config(): %q", got)
 	}
 }
+
+func TestNewProjectOwnsItsConfiguration(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		Processes: []Process{{Name: "api", Command: "go run .", Env: map[string]string{"PORT": "8080"}}},
+		Groups:    []ProcessGroup{{Name: "dev", Processes: []string{"api"}}},
+	}
+	project := NewProject("/tmp/.wts.yaml", "/tmp", cfg)
+	cfg.Processes[0].Name = "changed"
+	cfg.Processes[0].Env["PORT"] = "9090"
+	cfg.Groups[0].Processes[0] = "changed"
+	proc, err := project.Process("api")
+	if err != nil || proc.Name != "api" || proc.Env["PORT"] != "8080" {
+		t.Fatalf("configuration mutation changed indexed process: %#v, %v", proc, err)
+	}
+	if project.Groups[0].Processes[0] != "api" {
+		t.Fatal("configuration mutation changed group membership")
+	}
+}

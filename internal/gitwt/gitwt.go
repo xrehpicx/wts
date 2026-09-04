@@ -2,6 +2,7 @@ package gitwt
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,19 +27,27 @@ type Worktree struct {
 }
 
 func Discover(repoRoot string) ([]Worktree, error) {
+	return DiscoverContext(context.Background(), repoRoot)
+}
+
+// DiscoverContext lists worktrees and cancels Git when ctx is canceled.
+func DiscoverContext(ctx context.Context, repoRoot string) ([]Worktree, error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repo root: %w", err)
 	}
 
-	cmd := exec.Command("git", "-C", root, "worktree", "list", "--porcelain", "-z")
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain", "-z")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("list git worktrees: %w", ctx.Err())
+		}
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			return nil, fmt.Errorf("list git worktrees: %w", err)
 		}
-		return nil, fmt.Errorf("list git worktrees: %s", msg)
+		return nil, fmt.Errorf("list git worktrees: %w: %s", err, msg)
 	}
 
 	items, err := parsePorcelain(out)
@@ -81,8 +90,8 @@ func Discover(repoRoot string) ([]Worktree, error) {
 }
 
 func Resolve(items []Worktree, selector string) (*Worktree, error) {
-	sel := strings.TrimSpace(selector)
-	if sel == "" {
+	sel := selector
+	if strings.TrimSpace(sel) == "" {
 		return nil, fmt.Errorf("worktree selector is required")
 	}
 
@@ -137,11 +146,15 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 	}
 
 	separator := []byte{'\n'}
-	if bytes.IndexByte(data, 0) >= 0 {
+	nulDelimited := bytes.IndexByte(data, 0) >= 0
+	if nulDelimited {
 		separator = []byte{0}
 	}
 	for _, field := range bytes.Split(data, separator) {
-		line := strings.TrimSuffix(string(field), "\r")
+		line := string(field)
+		if !nulDelimited {
+			line = strings.TrimSuffix(line, "\r")
+		}
 		if line == "" {
 			if err := flush(); err != nil {
 				return nil, err
@@ -170,6 +183,8 @@ func parsePorcelain(data []byte) ([]Worktree, error) {
 			current.Bare = true
 		case line == "detached":
 			current.Detached = true
+		case line == "prunable":
+			current.Prunable = true
 		case strings.HasPrefix(line, "prunable "):
 			current.Prunable = true
 			current.PrunableReason = strings.TrimPrefix(line, "prunable ")

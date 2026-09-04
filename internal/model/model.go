@@ -65,6 +65,10 @@ func NewProject(configPath, rootDir string, cfg Config) *Project {
 		procByName:  make(map[string]int, len(cfg.Processes)),
 		groupByName: make(map[string]int, len(cfg.Groups)),
 	}
+	// Own the slices and nested data so caller edits cannot invalidate indexes.
+	owned := p.Config()
+	p.Processes = owned.Processes
+	p.Groups = owned.Groups
 	for i := range p.Processes {
 		p.procByName[p.Processes[i].Name] = i
 	}

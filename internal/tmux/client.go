@@ -64,7 +64,7 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) (string,
 		}
 		return "", err
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.String(), nil
 }
 
 type Client struct {
@@ -163,7 +163,7 @@ func (c *Client) StopWindow(ctx context.Context, session, window string, timeout
 		return err
 	}
 	for _, pane := range panes {
-		if pane.Dead || IsShellCommand(pane.Command) {
+		if pane.Dead || (IsShellCommand(pane.Command) && (pane.PID == "" || c.PaneExitedByPID(ctx, pane.PID))) {
 			continue
 		}
 		if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", pane.ID, "C-c"); err != nil {
@@ -213,7 +213,7 @@ func (c *Client) windowProcessesExited(ctx context.Context, session, window stri
 		return false, nil
 	}
 	for _, pane := range panes {
-		if pane.Dead || IsShellCommand(pane.Command) {
+		if pane.Dead || (IsShellCommand(pane.Command) && (pane.PID == "" || c.PaneExitedByPID(ctx, pane.PID))) {
 			continue
 		}
 		if pane.PID != "" && c.PaneExitedByPID(ctx, pane.PID) {
@@ -225,7 +225,7 @@ func (c *Client) windowProcessesExited(ctx context.Context, session, window stri
 }
 
 func (c *Client) SetSessionOption(ctx context.Context, session, key, value string) error {
-	if strings.TrimSpace(value) == "" {
+	if value == "" {
 		_, err := c.runner.Run(ctx, c.bin, "set-option", "-t", session, "-q", "-u", key)
 		if err != nil {
 			return fmt.Errorf("unset tmux option %q: %w", key, err)
@@ -248,7 +248,8 @@ func (c *Client) GetSessionOption(ctx context.Context, session, key string) (str
 		}
 		return "", fmt.Errorf("read tmux option %q: %w", key, err)
 	}
-	return strings.TrimSpace(value), nil
+	// show-option adds one newline; the option itself may end in whitespace.
+	return strings.TrimSuffix(value, "\n"), nil
 }
 
 func (c *Client) CapturePane(ctx context.Context, session, window string, lines int) (string, error) {
@@ -472,7 +473,12 @@ func (c *Client) paneState(ctx context.Context, paneID string) (pid string, exit
 	if len(parts) != 3 {
 		return "", false, fmt.Errorf("unexpected pane state %q", line)
 	}
-	return strings.TrimSpace(parts[0]), parts[1] == "1" || IsShellCommand(strings.TrimSpace(parts[2])), nil
+	pid = strings.TrimSpace(parts[0])
+	exited = parts[1] == "1"
+	if !exited && IsShellCommand(strings.TrimSpace(parts[2])) {
+		exited = pid == "" || c.PaneExitedByPID(ctx, pid)
+	}
+	return pid, exited, nil
 }
 
 func (c *Client) CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error) {
@@ -542,7 +548,9 @@ func buildPayload(command string, env map[string]string) string {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("export %s=%s", key, shellQuote(env[key])))
 	}
-	parts = append(parts, "exec "+command)
+	// Commands are shell programs: prefixing exec would discard everything
+	// after the first executable in a sequence and break assignments or loops.
+	parts = append(parts, command)
 	return strings.Join(parts, "; ")
 }
 
