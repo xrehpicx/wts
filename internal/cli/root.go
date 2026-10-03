@@ -36,12 +36,15 @@ type app struct {
 }
 
 type runtimeContext struct {
-	ctx        context.Context
-	project    *model.Project
-	repoRoot   string
-	worktrees  []gitwt.Worktree
-	manager    *runtime.Manager
-	newBackend func() runtime.Backend
+	ctx      context.Context
+	project  *model.Project
+	repoRoot string
+	// sessionRoot names the tmux session. It is the main worktree, so every
+	// linked worktree of a repository shares one session.
+	sessionRoot string
+	worktrees   []gitwt.Worktree
+	manager     *runtime.Manager
+	newBackend  func() runtime.Backend
 }
 
 func (rc *runtimeContext) context() context.Context {
@@ -161,17 +164,22 @@ func (a *app) withRuntime(ctx context.Context, fn func(*runtimeContext) error) e
 		if err != nil {
 			return err
 		}
+		sessionRoot, err := resolveSessionRoot(ctx, project.RootDir, repoRoot)
+		if err != nil {
+			return err
+		}
 		worktrees, err := gitwt.DiscoverContext(ctx, repoRoot)
 		if err != nil {
 			return err
 		}
 		rc := &runtimeContext{
-			ctx:        ctx,
-			project:    project,
-			repoRoot:   repoRoot,
-			worktrees:  worktrees,
-			manager:    runtime.NewManager(project, repoRoot, worktrees, a.newBackend()),
-			newBackend: a.newBackend,
+			ctx:         ctx,
+			project:     project,
+			repoRoot:    repoRoot,
+			sessionRoot: sessionRoot,
+			worktrees:   worktrees,
+			manager:     runtime.NewManager(project, sessionRoot, worktrees, a.newBackend()),
+			newBackend:  a.newBackend,
 		}
 		return fn(rc)
 	})
@@ -433,8 +441,9 @@ func (a *app) newStopCmd() *cobra.Command {
 		Long: strings.TrimSpace(`
 Stop process windows managed by wts.
 
-With no arguments it stops the active worktree process.
-With a selector it stops only that worktree.
+With no arguments it stops the active worktree's processes.
+With a selector it stops every process running in that worktree, whichever
+wts session owns its window, and reports when nothing was running.
 With --process it stops a specific process in the worktree.
 With --group it stops all processes from that configured group in the worktree.
 With --all it stops all discovered worktree windows.`),
@@ -474,10 +483,15 @@ With --all it stops all discovered worktree windows.`),
 					_, err := fmt.Fprintf(a.out, "✓ stopped %s in %s\n", displayField(proc), displayField(args[0]))
 					return err
 				case len(args) == 1:
-					if err := rc.manager.StopWorktree(cmd.Context(), args[0]); err != nil {
+					stopped, err := rc.manager.StopWorktree(cmd.Context(), args[0])
+					if err != nil {
 						return err
 					}
-					_, err := fmt.Fprintf(a.out, "✓ stopped %s\n", displayField(args[0]))
+					if !stopped {
+						_, err = fmt.Fprintf(a.out, "nothing running in %s\n", displayField(args[0]))
+						return err
+					}
+					_, err = fmt.Fprintf(a.out, "✓ stopped all processes in %s\n", displayField(args[0]))
 					return err
 				default:
 					if err := rc.manager.StopActive(cmd.Context()); err != nil {
@@ -767,6 +781,55 @@ func resolveRepoRoot(ctx context.Context, startDir string) (string, error) {
 		return "", fmt.Errorf("resolve git repo root: %w", err)
 	}
 	return abs, nil
+}
+
+// resolveSessionRoot returns the main worktree of the repository containing
+// startDir, or the shared git directory for repositories without one.
+//
+// The tmux session name must not depend on which worktree wts runs from.
+// `git rev-parse --show-toplevel` is the current worktree, so wts 0.4.0 put a
+// group started inside a linked worktree into that worktree's own session,
+// and wts run from anywhere else could not find, stop, or report it. Every
+// worktree shares the git common directory, whose parent is the main worktree.
+// For the main worktree this equals --show-toplevel, so its existing session
+// name does not change.
+func resolveSessionRoot(ctx context.Context, startDir, repoRoot string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
+	if startDir != "" {
+		cmd.Dir = startDir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return "", fmt.Errorf("resolve git common dir: %w", err)
+		}
+		return "", fmt.Errorf("resolve git common dir: %s: %w", msg, err)
+	}
+	commonDir := strings.TrimSuffix(string(out), "\n")
+	if commonDir == "" {
+		return repoRoot, nil
+	}
+	if !filepath.IsAbs(commonDir) {
+		base := startDir
+		if base == "" {
+			if base, err = os.Getwd(); err != nil {
+				return "", fmt.Errorf("resolve git common dir: %w", err)
+			}
+		}
+		commonDir = filepath.Join(base, commonDir)
+	}
+	// Match --show-toplevel, which reports the symlink-free path.
+	if resolved, err := filepath.EvalSymlinks(commonDir); err == nil {
+		commonDir = resolved
+	}
+	commonDir = filepath.Clean(commonDir)
+	if filepath.Base(commonDir) != ".git" {
+		// A bare repository, or a common dir outside the main worktree: the
+		// common dir itself is the one path every worktree shares.
+		return commonDir, nil
+	}
+	return filepath.Dir(commonDir), nil
 }
 
 func worktreeLabel(wt gitwt.Worktree) string {

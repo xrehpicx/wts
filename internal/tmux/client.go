@@ -25,6 +25,7 @@ type Backend interface {
 	EnsureTmux(ctx context.Context) error
 	EnsureSession(ctx context.Context, session string) error
 	HasWindow(ctx context.Context, session, window string) (bool, error)
+	FindWindowSessions(ctx context.Context, window string) ([]string, error)
 	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
 	StopWindow(ctx context.Context, session, window string, timeout time.Duration) error
 	SetSessionOption(ctx context.Context, session, key, value string) error
@@ -91,7 +92,7 @@ func (c *Client) EnsureTmux(ctx context.Context) error {
 }
 
 func (c *Client) EnsureSession(ctx context.Context, session string) error {
-	_, err := c.runner.Run(ctx, c.bin, "has-session", "-t", session)
+	_, err := c.runner.Run(ctx, c.bin, "has-session", "-t", SessionTarget(session))
 	if err == nil {
 		return nil
 	}
@@ -106,7 +107,7 @@ func (c *Client) EnsureSession(ctx context.Context, session string) error {
 }
 
 func (c *Client) HasWindow(ctx context.Context, session, window string) (bool, error) {
-	_, err := c.runner.Run(ctx, c.bin, "list-windows", "-t", session+":"+window)
+	_, err := c.runner.Run(ctx, c.bin, "list-windows", "-t", WindowTarget(session, window))
 	if err == nil {
 		return true, nil
 	}
@@ -116,22 +117,68 @@ func (c *Client) HasWindow(ctx context.Context, session, window string) (bool, e
 	return false, fmt.Errorf("check window %q in session %q: %w", window, session, err)
 }
 
+// SessionTarget returns an exact-match tmux target for session. Without the
+// "=" prefix tmux accepts a unique prefix or pattern match, which could pick a
+// different wts session whose name merely starts with session. The trailing
+// ":" matters: set-option and show-option reject "=name" without it.
+func SessionTarget(session string) string {
+	return "=" + session + ":"
+}
+
+// WindowTarget returns the tmux target for a window inside a specific session.
+// Both parts use tmux's "=" exact-match prefix so a missing session or window
+// fails instead of resolving against the current session or a prefix match.
+// Every session/window lookup must go through this helper: a bare window name
+// is resolved against the client's current session, not the worktree's.
+func WindowTarget(session, window string) string {
+	return SessionTarget(session) + "=" + window
+}
+
+// FindWindowSessions returns every session, in tmux order, that contains a
+// window named exactly window. It is used to locate worktree windows created
+// under another wts session name.
+func (c *Client) FindWindowSessions(ctx context.Context, window string) ([]string, error) {
+	output, err := c.runner.Run(ctx, c.bin, "list-windows", "-a", "-F", "#{session_name}\t#{window_name}")
+	if err != nil {
+		if isMissingTmuxTarget(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list tmux windows: %w", err)
+	}
+	return parseWindowSessions(output, window), nil
+}
+
+func parseWindowSessions(output, window string) []string {
+	var sessions []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		session, name, ok := strings.Cut(line, "\t")
+		if !ok || name != window || session == "" || seen[session] {
+			continue
+		}
+		seen[session] = true
+		sessions = append(sessions, session)
+	}
+	return sessions
+}
+
 func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
 	exists, err := c.HasWindow(ctx, session, window)
 	if err != nil {
 		return err
 	}
 	if exists {
-		if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", session+":"+window); err != nil {
+		if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", WindowTarget(session, window)); err != nil {
 			return fmt.Errorf("reset existing window %q: %w", window, err)
 		}
 	}
 
-	if _, err := c.runner.Run(ctx, c.bin, "new-window", "-d", "-t", session, "-n", window, "-c", dir); err != nil {
+	if _, err := c.runner.Run(ctx, c.bin, "new-window", "-d", "-t", SessionTarget(session), "-n", window, "-c", dir); err != nil {
 		return fmt.Errorf("create window %q: %w", window, err)
 	}
 
-	target := session + ":" + window
+	target := WindowTarget(session, window)
 	if err := c.hardenPane(ctx, target, paneTitle); err != nil {
 		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", target)
 		return fmt.Errorf("configure window %q: %w", window, err)
@@ -195,7 +242,7 @@ func (c *Client) StopWindow(ctx context.Context, session, window string, timeout
 		}
 	}
 
-	if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", session+":"+window); err != nil && !isMissingTmuxTarget(err) {
+	if _, err := c.runner.Run(ctx, c.bin, "kill-window", "-t", WindowTarget(session, window)); err != nil && !isMissingTmuxTarget(err) {
 		return fmt.Errorf("force kill window %q: %w", window, err)
 	}
 	return nil
@@ -226,13 +273,13 @@ func (c *Client) windowProcessesExited(ctx context.Context, session, window stri
 
 func (c *Client) SetSessionOption(ctx context.Context, session, key, value string) error {
 	if value == "" {
-		_, err := c.runner.Run(ctx, c.bin, "set-option", "-t", session, "-q", "-u", key)
+		_, err := c.runner.Run(ctx, c.bin, "set-option", "-t", SessionTarget(session), "-q", "-u", key)
 		if err != nil {
 			return fmt.Errorf("unset tmux option %q: %w", key, err)
 		}
 		return nil
 	}
-	_, err := c.runner.Run(ctx, c.bin, "set-option", "-t", session, "-q", key, value)
+	_, err := c.runner.Run(ctx, c.bin, "set-option", "-t", SessionTarget(session), "-q", key, value)
 	if err != nil {
 		return fmt.Errorf("set tmux option %q: %w", key, err)
 	}
@@ -240,7 +287,7 @@ func (c *Client) SetSessionOption(ctx context.Context, session, key, value strin
 }
 
 func (c *Client) GetSessionOption(ctx context.Context, session, key string) (string, error) {
-	value, err := c.runner.Run(ctx, c.bin, "show-option", "-t", session, "-v", key)
+	value, err := c.runner.Run(ctx, c.bin, "show-option", "-t", SessionTarget(session), "-v", key)
 	if err != nil {
 		message := strings.ToLower(err.Error())
 		if isMissingTmuxTarget(err) || strings.Contains(message, "invalid option") || strings.Contains(message, "unknown option") {
@@ -256,7 +303,7 @@ func (c *Client) CapturePane(ctx context.Context, session, window string, lines 
 	if lines <= 0 {
 		lines = 200
 	}
-	output, err := c.runner.Run(ctx, c.bin, "capture-pane", "-p", "-t", session+":"+window, "-S", fmt.Sprintf("-%d", lines))
+	output, err := c.runner.Run(ctx, c.bin, "capture-pane", "-p", "-t", WindowTarget(session, window), "-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return "", fmt.Errorf("capture pane for %q: %w", window, err)
 	}
@@ -267,7 +314,7 @@ func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string)
 	// Get the pane PID and check if it has child processes.
 	// send-keys runs commands as children of the pane shell, so if the
 	// shell has no children, the process has exited.
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_pid}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", WindowTarget(session, window), "-F", "#{pane_pid}")
 	if err != nil {
 		return "", fmt.Errorf("pane pid for %q: %w", window, err)
 	}
@@ -297,7 +344,7 @@ func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string)
 }
 
 func (c *Client) Attach(ctx context.Context, session, window, paneID string) error {
-	if _, err := c.runner.Run(ctx, c.bin, "select-window", "-t", session+":"+window); err != nil {
+	if _, err := c.runner.Run(ctx, c.bin, "select-window", "-t", WindowTarget(session, window)); err != nil {
 		return fmt.Errorf("select window %q: %w", window, err)
 	}
 	if paneID != "" {
@@ -306,12 +353,12 @@ func (c *Client) Attach(ctx context.Context, session, window, paneID string) err
 		}
 	}
 	if os.Getenv("TMUX") != "" {
-		if _, err := c.runner.Run(ctx, c.bin, "switch-client", "-t", session); err != nil {
+		if _, err := c.runner.Run(ctx, c.bin, "switch-client", "-t", SessionTarget(session)); err != nil {
 			return fmt.Errorf("switch tmux client to %q: %w", session, err)
 		}
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, c.bin, "attach-session", "-t", session)
+	cmd := exec.CommandContext(ctx, c.bin, "attach-session", "-t", SessionTarget(session))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -322,7 +369,7 @@ func (c *Client) Attach(ctx context.Context, session, window, paneID string) err
 }
 
 func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string) error {
-	if err := c.hardenPane(ctx, session+":"+window, title); err != nil {
+	if err := c.hardenPane(ctx, WindowTarget(session, window), title); err != nil {
 		return fmt.Errorf("set pane title for %q: %w", window, err)
 	}
 	return nil
@@ -330,7 +377,7 @@ func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string
 
 func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
 	// Split and capture the new pane ID.
-	paneID, err := c.runner.Run(ctx, c.bin, "split-window", "-d", "-t", session+":"+window, "-c", dir, "-P", "-F", "#{pane_id}")
+	paneID, err := c.runner.Run(ctx, c.bin, "split-window", "-d", "-t", WindowTarget(session, window), "-c", dir, "-P", "-F", "#{pane_id}")
 	if err != nil {
 		return fmt.Errorf("split window %q: %w", window, err)
 	}
@@ -377,7 +424,7 @@ func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) error
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", session+":"+window, "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", WindowTarget(session, window), "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}

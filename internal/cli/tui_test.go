@@ -39,6 +39,9 @@ func (b *tuiTestBackend) EnsureSession(context.Context, string) error {
 func (b *tuiTestBackend) HasWindow(_ context.Context, _ string, window string) (bool, error) {
 	return b.windows[window], nil
 }
+func (b *tuiTestBackend) FindWindowSessions(context.Context, string) ([]string, error) {
+	return nil, nil
+}
 func (b *tuiTestBackend) StartWindowCommand(context.Context, string, string, string, string, string, map[string]string, string) error {
 	return nil
 }

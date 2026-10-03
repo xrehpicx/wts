@@ -321,7 +321,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createGroupSelected = map[string]bool{}
 		m.createGroupInput.Blur()
 		m.rc.project = msg.project
-		m.rc.manager = runtime.NewManager(msg.project, m.rc.repoRoot, m.rc.worktrees, m.rc.newBackend())
+		m.rc.manager = runtime.NewManager(msg.project, m.rc.sessionRoot, m.rc.worktrees, m.rc.newBackend())
 		m.targets = m.rc.project.Targets()
 		m.selectTarget(msg.target)
 		m.message = "created group " + msg.target.Name
