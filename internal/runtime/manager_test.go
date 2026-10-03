@@ -13,7 +13,13 @@ import (
 )
 
 type mockBackend struct {
-	windows            map[string]bool
+	windows map[string]bool
+	// windowSession records which session owns a window. Like real tmux, a
+	// window is only visible through its own session; windows without an entry
+	// are visible through any session.
+	windowSession      map[string]string
+	foreignOptions     map[string]map[string]string // session -> options, for sessions other than the manager's
+	stopWindowCalls    []windowRef
 	options            map[string]string
 	startCount         map[string]int
 	stopCount          map[string]int
@@ -27,12 +33,14 @@ type mockBackend struct {
 
 func newMockBackend() *mockBackend {
 	return &mockBackend{
-		windows:     map[string]bool{},
-		options:     map[string]string{},
-		startCount:  map[string]int{},
-		stopCount:   map[string]int{},
-		panes:       map[string][]tmux.PaneInfo{},
-		exitedByPID: map[string]bool{},
+		windows:        map[string]bool{},
+		windowSession:  map[string]string{},
+		foreignOptions: map[string]map[string]string{},
+		options:        map[string]string{},
+		startCount:     map[string]int{},
+		stopCount:      map[string]int{},
+		panes:          map[string][]tmux.PaneInfo{},
+		exitedByPID:    map[string]bool{},
 	}
 }
 
@@ -41,11 +49,22 @@ func (m *mockBackend) EnsureSession(context.Context, string) error {
 	m.ensureSessionCount++
 	return nil
 }
-func (m *mockBackend) HasWindow(_ context.Context, _ string, window string) (bool, error) {
-	return m.windows[window], nil
+func (m *mockBackend) visible(session, window string) bool {
+	owner, ok := m.windowSession[window]
+	return m.windows[window] && (!ok || owner == session)
 }
-func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ string, _ string, _ string, _ map[string]string, paneTitle string) error {
+func (m *mockBackend) HasWindow(_ context.Context, session string, window string) (bool, error) {
+	return m.visible(session, window), nil
+}
+func (m *mockBackend) FindWindowSessions(_ context.Context, window string) ([]string, error) {
+	if owner, ok := m.windowSession[window]; ok && m.windows[window] {
+		return []string{owner}, nil
+	}
+	return nil, nil
+}
+func (m *mockBackend) StartWindowCommand(_ context.Context, session string, window, _ string, _ string, _ string, _ map[string]string, paneTitle string) error {
 	m.windows[window] = true
+	m.windowSession[window] = session
 	m.startCount[window]++
 	if paneTitle != "" {
 		m.panes[window] = []tmux.PaneInfo{{ID: fmt.Sprintf("%%%d", m.nextPaneID), Process: tmux.ProcessFromPaneTitle(paneTitle), Title: paneTitle, PID: fmt.Sprint(1000 + m.nextPaneID), Command: "node"}}
@@ -53,22 +72,34 @@ func (m *mockBackend) StartWindowCommand(_ context.Context, _ string, window, _ 
 	}
 	return nil
 }
-func (m *mockBackend) StopWindow(_ context.Context, _ string, window string, _ time.Duration) error {
+func (m *mockBackend) StopWindow(_ context.Context, session string, window string, _ time.Duration) error {
+	m.stopWindowCalls = append(m.stopWindowCalls, windowRef{Session: session, Window: window})
+	if !m.visible(session, window) {
+		// The real client treats a window missing from session as stopped.
+		return nil
+	}
 	m.windows[window] = false
 	m.stopCount[window]++
 	delete(m.panes, window)
 	return nil
 }
-func (m *mockBackend) SetSessionOption(_ context.Context, _ string, key, value string) error {
+func (m *mockBackend) optionsFor(session string) map[string]string {
+	if options, ok := m.foreignOptions[session]; ok {
+		return options
+	}
+	return m.options
+}
+func (m *mockBackend) SetSessionOption(_ context.Context, session string, key, value string) error {
+	options := m.optionsFor(session)
 	if value == "" {
-		delete(m.options, key)
+		delete(options, key)
 		return nil
 	}
-	m.options[key] = value
+	options[key] = value
 	return nil
 }
-func (m *mockBackend) GetSessionOption(_ context.Context, _ string, key string) (string, error) {
-	return m.options[key], nil
+func (m *mockBackend) GetSessionOption(_ context.Context, session string, key string) (string, error) {
+	return m.optionsFor(session)[key], nil
 }
 func (m *mockBackend) CapturePane(context.Context, string, string, int) (string, error) {
 	return "", nil
@@ -107,9 +138,12 @@ func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ s
 	m.startCount[window]++
 	return nil
 }
-func (m *mockBackend) ListPanes(_ context.Context, _, window string) ([]tmux.PaneInfo, error) {
+func (m *mockBackend) ListPanes(_ context.Context, session, window string) ([]tmux.PaneInfo, error) {
 	if m.listPanesErr != nil {
 		return nil, m.listPanesErr
+	}
+	if owner, ok := m.windowSession[window]; ok && owner != session {
+		return nil, fmt.Errorf("list panes for %q: exit status 1: can't find window: %s", window, window)
 	}
 	return m.panes[window], nil
 }
@@ -558,8 +592,12 @@ func TestStopWorktreeKillsAllPanes(t *testing.T) {
 	if err := manager.Start(ctx, "repo-main", RunOptions{Process: "web"}); err != nil {
 		t.Fatalf("start web: %v", err)
 	}
-	if err := manager.StopWorktree(ctx, "repo-main"); err != nil {
+	stopped, err := manager.StopWorktree(ctx, "repo-main")
+	if err != nil {
 		t.Fatalf("stop worktree: %v", err)
+	}
+	if !stopped {
+		t.Fatal("expected StopWorktree to report a running worktree")
 	}
 
 	window := tmux.WindowName("/tmp/repo-main")

@@ -6,6 +6,18 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ## [Unreleased]
 
+### Fixed
+
+- `stop`, `status`, `logs`, and attach found nothing when a worktree's processes
+  were started from a different worktree. The tmux session was named after the
+  worktree wts ran from, so `stop <worktree>` reported success while the
+  processes kept running, and `--process`/`--group` failed with `can't find
+  window`. All worktrees of a repository now share the session named after the
+  main worktree, windows left in other wts sessions are still found, and every
+  tmux target is an exact `=session:=window` match
+- `stop <worktree>` stops every process in that worktree and says so, or
+  reports that nothing was running
+
 ## [0.4.0] - 2026-09-05
 
 ### Improved

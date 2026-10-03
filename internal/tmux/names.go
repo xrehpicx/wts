@@ -88,3 +88,9 @@ func sanitize(value string) string {
 	}
 	return b.String()
 }
+
+// IsManagedSession reports whether a tmux session name follows the wts
+// SessionName format.
+func IsManagedSession(session string) bool {
+	return strings.HasPrefix(session, "wts_")
+}

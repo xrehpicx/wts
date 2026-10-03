@@ -131,7 +131,7 @@ func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
 	m.loadingMsg = "stopping all in " + name + "..."
 	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
-		if err := manager.StopWorktree(ctx, dir); err != nil {
+		if _, err := manager.StopWorktree(ctx, dir); err != nil {
 			return actionErrMsg{err: err}
 		}
 		return actionDoneMsg{text: "stopped all in " + name}

@@ -6,8 +6,9 @@ Stop worktree process(es)
 
 Stop process windows managed by wts.
 
-With no arguments it stops the active worktree process.
-With a selector it stops only that worktree.
+With no arguments it stops the active worktree's processes.
+With a selector it stops every process running in that worktree, whichever
+wts session owns its window, and reports when nothing was running.
 With --process it stops a specific process in the worktree.
 With --group it stops all processes from that configured group in the worktree.
 With --all it stops all discovered worktree windows.
