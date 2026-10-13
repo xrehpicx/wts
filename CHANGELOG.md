@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
 ### Added
 
 - Run the same process or group in several worktrees at once:
