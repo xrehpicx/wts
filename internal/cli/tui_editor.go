@@ -110,17 +110,21 @@ func (m *tuiModel) saveCreateGroupCmd() tea.Cmd {
 		return nil
 	}
 
-	cfg := m.rc.project.Config()
-	cfg.Groups = append(cfg.Groups, model.ProcessGroup{
-		Name:      name,
-		Processes: append([]string(nil), members...),
-	})
-
-	m.loading = true
-	m.loadingMsg = "saving group " + name + "..."
+	m.startLoading("saving group " + name + "...")
 
 	configPath := m.rc.project.ConfigPath
 	return tea.Batch(m.spinner.Tick, func() tea.Msg {
+		// Start from the file as it is now, so edits made while the TUI was
+		// open are kept rather than replaced by the snapshot loaded at startup.
+		current, err := config.Load(configPath)
+		if err != nil {
+			return actionErrMsg{err: err}
+		}
+		cfg := current.Config()
+		cfg.Groups = append(cfg.Groups, model.ProcessGroup{
+			Name:      name,
+			Processes: append([]string(nil), members...),
+		})
 		project, err := config.Save(configPath, cfg)
 		if err != nil {
 			return actionErrMsg{err: err}

@@ -84,6 +84,8 @@ process or group in the target worktree.`,
   wts list
   wts switch repo-main --process api
   wts switch repo-main --group dev
+  wts start repo-main repo-agent --group dev
+  wts start --all --process api
   wts next --process demo-script
   wts status --json
   wts tui
@@ -254,25 +256,34 @@ func (a *app) newListCmd() *cobra.Command {
 }
 
 func (a *app) newSwitchCmd() *cobra.Command {
-	return a.newRunCmd("switch", "Switch to a worktree and hand off a target", (*runtime.Manager).Switch)
+	return a.newRunCmd("switch", "Switch to a worktree and hand off a target", "✓ switched %s to %s\n", false, (*runtime.Manager).Switch)
 }
 
 func (a *app) newStartCmd() *cobra.Command {
-	return a.newRunCmd("start", "Start a target in a worktree (additive)", (*runtime.Manager).Start)
+	return a.newRunCmd("start", "Start a target in one or more worktrees (additive)", "✓ started %s in %s\n", true, (*runtime.Manager).Start)
 }
 
 func (a *app) newRestartCmd() *cobra.Command {
-	return a.newRunCmd("restart", "Restart a target in a worktree", (*runtime.Manager).Restart)
+	return a.newRunCmd("restart", "Restart a target in one or more worktrees", "✓ restarted %s in %s\n", true, (*runtime.Manager).Restart)
 }
 
-func (a *app) newRunCmd(name, short string, fn func(*runtime.Manager, context.Context, string, runtime.RunOptions) error) *cobra.Command {
+// newRunCmd builds switch/start/restart. Additive commands accept several
+// worktrees; switch preempts the active worktree, so it takes exactly one.
+func (a *app) newRunCmd(name, short, message string, multi bool, fn func(*runtime.Manager, context.Context, string, runtime.RunOptions) error) *cobra.Command {
 	var (
 		attach  bool
+		all     bool
 		process string
 		group   string
 	)
+	use := name + " <worktree>"
+	args := cobra.ExactArgs(1)
+	if multi {
+		use = name + " <worktree>..."
+		args = cobra.ArbitraryArgs
+	}
 	cmd := &cobra.Command{
-		Use:   name + " <worktree>",
+		Use:   use,
 		Short: short,
 		Long: strings.TrimSpace(`
 Start or move a process profile or process group to a target worktree.
@@ -281,41 +292,89 @@ Start or move a process profile or process group to a target worktree.
 'start' is additive: starts the target alongside any already running processes.
 'restart' stops and re-starts the selected process or group.
 
+'start' and 'restart' accept several worktrees to run the same target in each of
+them; 'start --all' uses every available worktree. Every worktree is resolved
+before anything starts. Processes receive WTS_WORKTREE, WTS_WORKTREE_DIR,
+WTS_BRANCH, and WTS_PROCESS, so commands can choose distinct ports.
+
 Process groups are configured in .wts.yaml and each member process still runs in
 its own tmux pane.`),
-		Example: strings.TrimSpace(fmt.Sprintf(`
-  wts %s repo-main
-  wts %s ../repo-agent --process demo-script
-  wts %s ../repo-agent --group dev
-  wts %s /abs/path/to/worktree --attach
-`, name, name, name, name)),
-		Args: cobra.ExactArgs(1),
+		Example: runCmdExample(name, multi),
+		Args:    args,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts, err := runOptionsFromFlags(strings.TrimSpace(process), strings.TrimSpace(group), attach)
 			if err != nil {
 				return err
 			}
+			if err := validateRunSelection(all, attach, args); err != nil {
+				return err
+			}
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
-				if err := fn(rc.manager, cmd.Context(), args[0], opts); err != nil {
+				target, err := rc.project.ResolveTarget(opts.Process, opts.Group)
+				if err != nil {
 					return err
 				}
-				target, _ := rc.project.ResolveTarget(opts.Process, opts.Group)
-				message := "✓ started %s in %s\n"
-				switch name {
-				case "switch":
-					message = "✓ switched %s to %s\n"
-				case "restart":
-					message = "✓ restarted %s in %s\n"
+				selectors := args
+				if all {
+					selectors = worktreeDirs(rc.manager.AvailableWorktrees())
+					if len(selectors) == 0 {
+						return fmt.Errorf("no available worktrees found")
+					}
 				}
-				_, err := fmt.Fprintf(a.out, message, displayField(formatTargetLabel(target)), displayField(args[0]))
-				return err
+				return rc.manager.ForEachWorktree(cmd.Context(), selectors, func(ctx context.Context, wt gitwt.Worktree) error {
+					if err := fn(rc.manager, ctx, wt.Dir, opts); err != nil {
+						return err
+					}
+					_, err := fmt.Fprintf(a.out, message, displayField(formatTargetLabel(target)), displayField(wt.Name))
+					return err
+				})
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&attach, "attach", false, "attach/focus tmux after command")
+	cmd.Flags().BoolVar(&attach, "attach", false, "attach/focus tmux after command (single worktree only)")
 	cmd.Flags().StringVar(&process, "process", "", "process profile name (default: first process in config)")
 	cmd.Flags().StringVar(&group, "group", "", "process group name from config")
+	if multi && name == "start" {
+		cmd.Flags().BoolVar(&all, "all", false, "start in every available worktree")
+	}
 	return cmd
+}
+
+func runCmdExample(name string, multi bool) string {
+	example := fmt.Sprintf(`
+  wts %[1]s repo-main
+  wts %[1]s ../repo-agent --process demo-script
+  wts %[1]s ../repo-agent --group dev
+  wts %[1]s /abs/path/to/worktree --attach`, name)
+	if multi {
+		example += fmt.Sprintf(`
+  wts %[1]s repo-main repo-agent --group dev`, name)
+	}
+	if name == "start" {
+		example += `
+  wts start --all --process api`
+	}
+	return strings.TrimSpace(example)
+}
+
+func validateRunSelection(all, attach bool, args []string) error {
+	switch {
+	case all && len(args) > 0:
+		return fmt.Errorf("--all cannot be combined with worktree selectors")
+	case !all && len(args) == 0:
+		return fmt.Errorf("at least one worktree is required (or use --all)")
+	case attach && (all || len(args) > 1):
+		return fmt.Errorf("--attach requires a single worktree")
+	}
+	return nil
+}
+
+func worktreeDirs(items []gitwt.Worktree) []string {
+	dirs := make([]string, 0, len(items))
+	for _, wt := range items {
+		dirs = append(dirs, wt.Dir)
+	}
+	return dirs
 }
 
 func (a *app) newNextCmd() *cobra.Command {
@@ -382,7 +441,7 @@ func (a *app) newPrevCmd() *cobra.Command {
 
 func (a *app) cycleAndSwitch(ctx context.Context, delta int, opts runtime.RunOptions) error {
 	return a.withRuntime(ctx, func(rc *runtimeContext) error {
-		items := rc.manager.ListWorktrees()
+		items := rc.manager.AvailableWorktrees()
 		if len(items) == 0 {
 			return fmt.Errorf("no git worktrees found (create one with: git worktree add ../branch-name)")
 		}
@@ -436,26 +495,27 @@ func (a *app) newStopCmd() *cobra.Command {
 		group   string
 	)
 	cmd := &cobra.Command{
-		Use:   "stop [worktree]",
+		Use:   "stop [worktree...]",
 		Short: "Stop worktree process(es)",
 		Long: strings.TrimSpace(`
 Stop process windows managed by wts.
 
 With no arguments it stops the active worktree's processes.
-With a selector it stops every process running in that worktree, whichever
-wts session owns its window, and reports when nothing was running.
-With --process it stops a specific process in the worktree.
-With --group it stops all processes from that configured group in the worktree.
+With selectors it stops every process running in those worktrees, whichever
+wts session owns their windows, and reports when nothing was running.
+With --process it stops a specific process in the selected worktrees.
+With --group it stops all processes from that configured group in the selected worktrees.
 With --all it stops all discovered worktree windows.`),
 		Example: strings.TrimSpace(`
   wts stop
   wts stop repo-main
+  wts stop repo-main repo-agent
   wts stop repo-main --process api
-  wts stop repo-main --group dev
+  wts stop repo-main repo-agent --group dev
   wts stop /abs/path/to/worktree
   wts stop --all
 `),
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			proc := strings.TrimSpace(process)
 			groupName := strings.TrimSpace(group)
@@ -470,36 +530,41 @@ With --all it stops all discovered worktree windows.`),
 					}
 					_, err := fmt.Fprintln(a.out, "✓ stopped all worktrees")
 					return err
-				case len(args) == 1 && groupName != "":
-					if err := rc.manager.StopGroup(cmd.Context(), args[0], groupName); err != nil {
-						return err
-					}
-					_, err := fmt.Fprintf(a.out, "✓ stopped group %s in %s\n", displayField(groupName), displayField(args[0]))
-					return err
-				case len(args) == 1 && proc != "":
-					if err := rc.manager.StopProcess(cmd.Context(), args[0], proc); err != nil {
-						return err
-					}
-					_, err := fmt.Fprintf(a.out, "✓ stopped %s in %s\n", displayField(proc), displayField(args[0]))
-					return err
-				case len(args) == 1:
-					stopped, err := rc.manager.StopWorktree(cmd.Context(), args[0])
-					if err != nil {
-						return err
-					}
-					if !stopped {
-						_, err = fmt.Fprintf(a.out, "nothing running in %s\n", displayField(args[0]))
-						return err
-					}
-					_, err = fmt.Fprintf(a.out, "✓ stopped all processes in %s\n", displayField(args[0]))
-					return err
-				default:
+				case len(args) == 0:
 					if err := rc.manager.StopActive(cmd.Context()); err != nil {
 						return err
 					}
 					_, err := fmt.Fprintln(a.out, "✓ stopped active worktree")
 					return err
 				}
+				if proc != "" || groupName != "" {
+					if _, err := rc.project.ResolveTarget(proc, groupName); err != nil {
+						return err
+					}
+				}
+				return rc.manager.ForEachWorktree(cmd.Context(), args, func(ctx context.Context, wt gitwt.Worktree) error {
+					var err error
+					switch {
+					case groupName != "":
+						if err = rc.manager.StopGroup(ctx, wt.Dir, groupName); err == nil {
+							_, err = fmt.Fprintf(a.out, "✓ stopped group %s in %s\n", displayField(groupName), displayField(wt.Name))
+						}
+					case proc != "":
+						if err = rc.manager.StopProcess(ctx, wt.Dir, proc); err == nil {
+							_, err = fmt.Fprintf(a.out, "✓ stopped %s in %s\n", displayField(proc), displayField(wt.Name))
+						}
+					default:
+						var stopped bool
+						if stopped, err = rc.manager.StopWorktree(ctx, wt.Dir); err == nil {
+							if stopped {
+								_, err = fmt.Fprintf(a.out, "✓ stopped all processes in %s\n", displayField(wt.Name))
+							} else {
+								_, err = fmt.Fprintf(a.out, "nothing running in %s\n", displayField(wt.Name))
+							}
+						}
+					}
+					return err
+				})
 			})
 		},
 	}
@@ -663,7 +728,7 @@ func (a *app) newPickCmd() *cobra.Command {
 				return err
 			}
 			return a.withRuntime(cmd.Context(), func(rc *runtimeContext) error {
-				items := rc.manager.ListWorktrees()
+				items := rc.manager.AvailableWorktrees()
 				if len(items) == 0 {
 					return fmt.Errorf("no git worktrees found (create one with: git worktree add ../branch-name)")
 				}
@@ -705,6 +770,11 @@ member of a configured group. Groups are defined in .wts.yaml and appear in the
 target selector as [group] <name>. Press g to create a group and save it back
 to the current repo's .wts.yaml.
 
+Press space to mark worktrees. While any are marked, start, restart, stop, and
+stop-all apply to every marked worktree instead of the selected one, and never
+preempt other worktrees; esc clears the marks. Use this to run the same process
+or group in several worktrees at once.
+
 Search lists matching targets: use up/down to choose, enter to select, or esc to
 cancel. The group editor uses tab to change focus, space to toggle members, enter
 to save, and esc to cancel. Ctrl+c quits from any screen. Narrow terminals show a
@@ -716,6 +786,7 @@ Shortcuts:
   s/enter  start/switch target   a      attach tmux
   r        restart target
   x        stop selected target  /      search target by name
+  space    mark worktree         esc    clear marks
   g        create group in .wts.yaml
   X        stop all in worktree  ?      toggle full help
   q        quit

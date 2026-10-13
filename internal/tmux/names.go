@@ -27,10 +27,26 @@ func SessionName(repoRoot string) string {
 	return fmt.Sprintf("wts_%x_%s", hash[:4], base)
 }
 
+const windowPrefix = "ws_"
+
 func WindowName(worktreeDir string) string {
 	base := sanitize(filepath.Base(worktreeDir))
 	hash := sha1.Sum([]byte(filepath.Clean(worktreeDir)))
-	return fmt.Sprintf("ws_%x_%s", hash[:4], base)
+	return fmt.Sprintf("%s%x_%s", windowPrefix, hash[:4], base)
+}
+
+// IsWorktreeWindow reports whether a window name was produced by WindowName.
+func IsWorktreeWindow(name string) bool {
+	rest, ok := strings.CutPrefix(name, windowPrefix)
+	if !ok || len(rest) < 9 || rest[8] != '_' {
+		return false
+	}
+	for _, r := range rest[:8] {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
 }
 
 func ActiveWorktreeOptionKey() string {
@@ -56,6 +72,13 @@ func ProcessOptionKey(worktreeDir string) string {
 
 func PaneProcessOptionKey() string {
 	return "@wts_process"
+}
+
+// directLaunch marks panes whose process is the managed command itself.
+const directLaunch = "direct"
+
+func PaneLaunchOptionKey() string {
+	return "@wts_launch"
 }
 
 // IsShellCommand returns true if the command name looks like a shell.

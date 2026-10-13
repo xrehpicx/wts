@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 type mockBackend struct {
+	mu      sync.Mutex
 	windows map[string]bool
 	// windowSession records which session owns a window. Like real tmux, a
 	// window is only visible through its own session; windows without an entry
@@ -27,8 +29,12 @@ type mockBackend struct {
 	exitedByPID        map[string]bool
 	attachCalls        []AttachSpec
 	listPanesErr       error
+	splitErr           error
+	startErr           error
+	capturedPane       string
 	ensureSessionCount int
 	nextPaneID         int
+	envByPane          map[string]map[string]string // pane title in window -> env
 }
 
 func newMockBackend() *mockBackend {
@@ -62,7 +68,18 @@ func (m *mockBackend) FindWindowSessions(_ context.Context, window string) ([]st
 	}
 	return nil, nil
 }
-func (m *mockBackend) StartWindowCommand(_ context.Context, session string, window, _ string, _ string, _ string, _ map[string]string, paneTitle string) error {
+func (m *mockBackend) recordEnv(window, paneTitle string, env map[string]string) {
+	if m.envByPane == nil {
+		m.envByPane = map[string]map[string]string{}
+	}
+	m.envByPane[window+"/"+paneTitle] = env
+}
+
+func (m *mockBackend) StartWindowCommand(_ context.Context, session string, window, _ string, _ string, _ string, env map[string]string, paneTitle string) error {
+	if m.startErr != nil {
+		return m.startErr
+	}
+	m.recordEnv(window, paneTitle, env)
 	m.windows[window] = true
 	m.windowSession[window] = session
 	m.startCount[window]++
@@ -101,11 +118,14 @@ func (m *mockBackend) SetSessionOption(_ context.Context, session string, key, v
 func (m *mockBackend) GetSessionOption(_ context.Context, session string, key string) (string, error) {
 	return m.optionsFor(session)[key], nil
 }
-func (m *mockBackend) CapturePane(context.Context, string, string, int) (string, error) {
-	return "", nil
-}
-func (m *mockBackend) PaneCurrentCommand(context.Context, string, string) (string, error) {
-	return "", nil
+func (m *mockBackend) ListWindows(_ context.Context, session string) ([]string, error) {
+	var names []string
+	for name := range m.windows {
+		if m.visible(session, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 func (m *mockBackend) Attach(_ context.Context, session, window, paneID string) error {
 	m.attachCalls = append(m.attachCalls, AttachSpec{
@@ -116,16 +136,11 @@ func (m *mockBackend) Attach(_ context.Context, session, window, paneID string) 
 	return nil
 }
 
-func (m *mockBackend) SetPaneTitle(_ context.Context, _, window, title string) error {
-	if len(m.panes[window]) > 0 {
-		m.panes[window][len(m.panes[window])-1].Title = title
-		m.panes[window][len(m.panes[window])-1].Process = tmux.ProcessFromPaneTitle(title)
-	} else {
-		m.panes[window] = []tmux.PaneInfo{{ID: "%0", Process: tmux.ProcessFromPaneTitle(title), Title: title, PID: "1000", Command: "node"}}
+func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ string, env map[string]string, paneTitle string) error {
+	if m.splitErr != nil {
+		return m.splitErr
 	}
-	return nil
-}
-func (m *mockBackend) SplitWindowCommand(_ context.Context, _, window, _, _, _ string, _ map[string]string, paneTitle string) error {
+	m.recordEnv(window, paneTitle, env)
 	id := m.nextPaneID
 	m.nextPaneID++
 	m.panes[window] = append(m.panes[window], tmux.PaneInfo{
@@ -148,6 +163,8 @@ func (m *mockBackend) ListPanes(_ context.Context, session, window string) ([]tm
 	return m.panes[window], nil
 }
 func (m *mockBackend) StopPane(_ context.Context, paneID string, _ time.Duration) error {
+	m.mu.Lock() // the manager stops panes concurrently
+	defer m.mu.Unlock()
 	for w, panes := range m.panes {
 		for i, p := range panes {
 			if p.ID == paneID {
@@ -162,7 +179,8 @@ func (m *mockBackend) StopPane(_ context.Context, paneID string, _ time.Duration
 	}
 	return nil
 }
-func (m *mockBackend) CapturePaneByID(context.Context, string, int) (string, error) {
+func (m *mockBackend) CapturePaneByID(_ context.Context, paneID string, _ int) (string, error) {
+	m.capturedPane = paneID
 	return "", nil
 }
 func (m *mockBackend) PaneExitedByPID(_ context.Context, pid string) bool {

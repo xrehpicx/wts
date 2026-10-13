@@ -51,6 +51,8 @@ func TestWindowCommandsNeverTargetBareWindowNames(t *testing.T) {
 			return "", nil
 		case "list-panes":
 			return "%3\tapi\twts:api\t123\tsh\t1", nil
+		case "new-window":
+			return "%2\n", nil
 		case "split-window":
 			return "%4\n", nil
 		}
@@ -64,9 +66,6 @@ func TestWindowCommandsNeverTargetBareWindowNames(t *testing.T) {
 	if err := client.SplitWindowCommand(ctx, session, window, "/tmp", "/bin/sh", "true", nil, ProcessPaneTitle("web")); err != nil {
 		t.Fatalf("split: %v", err)
 	}
-	if err := client.SetPaneTitle(ctx, session, window, ProcessPaneTitle("api")); err != nil {
-		t.Fatalf("set title: %v", err)
-	}
 	if _, err := client.HasWindow(ctx, session, window); err != nil {
 		t.Fatalf("has window: %v", err)
 	}
@@ -76,8 +75,8 @@ func TestWindowCommandsNeverTargetBareWindowNames(t *testing.T) {
 	if _, err := client.CapturePane(ctx, session, window, 10); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
-	if _, err := client.PaneCurrentCommand(ctx, session, window); err != nil {
-		t.Fatalf("pane command: %v", err)
+	if _, err := client.ListWindows(ctx, session); err != nil {
+		t.Fatalf("list windows: %v", err)
 	}
 	if err := client.SetSessionOption(ctx, session, ActiveProcessOptionKey(), "api"); err != nil {
 		t.Fatalf("set option: %v", err)
@@ -101,7 +100,7 @@ func TestWindowCommandsNeverTargetBareWindowNames(t *testing.T) {
 		case strings.HasPrefix(target, "%"):
 		case target == windowTarget:
 			sawWindow = true
-		case target == sessionTarget && (command == "new-window" || command == "set-option" || command == "show-option" || command == "has-session"):
+		case target == sessionTarget && (command == "new-window" || command == "list-windows" || command == "set-option" || command == "show-option" || command == "has-session"):
 		default:
 			t.Errorf("%s used target %q; want a pane ID or %q", command, target, windowTarget)
 		}

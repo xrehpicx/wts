@@ -6,6 +6,17 @@ The format is based on Keep a Changelog and this project follows SemVer.
 
 ## [Unreleased]
 
+### Added
+
+- Run the same process or group in several worktrees at once:
+  `wts start <worktree>...`, `wts start --all`, and `wts restart`/`wts stop` with
+  several worktrees. Every selector is resolved before anything starts, and
+  failures are reported per worktree without stopping the others
+- TUI worktree marking: `space` marks worktrees, `enter`/`r`/`x`/`X` act on all
+  marked worktrees without preempting others, and `esc` clears the marks
+- Processes receive `WTS_WORKTREE`, `WTS_WORKTREE_DIR`, `WTS_BRANCH`, and
+  `WTS_PROCESS`, so parallel copies can choose distinct ports
+
 ### Fixed
 
 - `stop`, `status`, `logs`, and attach found nothing when a worktree's processes
@@ -17,6 +28,25 @@ The format is based on Keep a Changelog and this project follows SemVer.
   tmux target is an exact `=session:=window` match
 - `stop <worktree>` stops every process in that worktree and says so, or
   reports that nothing was running
+- Commands no longer pass through tmux's interactive default shell: fish, nu, or
+  other non-POSIX shells no longer mangle quoting or environment values, and
+  starts no longer appear in shell history
+- Six or more processes in one worktree no longer fail with "no space for new
+  pane"; panes are tiled as they are added
+- A switch that fails partway records the worktree that actually runs processes,
+  so later switches and stops no longer leave them running untracked
+- Worktree paths reached through symlinks (such as macOS `/var`) resolve
+- `stop --all` also stops windows of worktrees removed while running
+- `next`, `prev`, and `pick` skip bare and prunable worktrees
+- Stopping or restarting a group interrupts all members together instead of
+  waiting for each in turn
+- `logs` without `--process` shows the first process, not the last-focused pane
+- Saving a group from the TUI keeps edits made to `.wts.yaml` while it was open
+- `wts init` lists usual entry points such as `dev` and `start` first, so they
+  become the default process
+- Worktree discovery works with Git older than 2.36
+- Process and group names ending in `;`, which tmux silently truncates, are
+  rejected
 
 ## [0.4.0] - 2026-09-05
 

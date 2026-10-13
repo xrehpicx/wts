@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -422,5 +423,26 @@ func TestPythonDetectorDjangoUsesProjectEnvironment(t *testing.T) {
 	}
 	if result.Processes[0].Command != "uv run python manage.py runserver" {
 		t.Fatalf("Django command bypasses environment: %q", result.Processes[0].Command)
+	}
+}
+
+func TestRunListsUsualEntryPointsFirst(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	pkg := `{"scripts": {"build": "tsc", "lint": "eslint .", "start": "node .", "dev": "vite"}}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Run(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, process := range result.Processes {
+		names = append(names, process.Name)
+	}
+	if got := strings.Join(names, ","); got != "dev,start,build,lint" {
+		t.Fatalf("process order = %s; the default should be dev", got)
 	}
 }

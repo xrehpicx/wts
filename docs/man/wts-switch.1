@@ -1,5 +1,5 @@
 .nh
-.TH "WORKSWITCH" "1" "Sep 2026" "workswitch" "workswitch Manual"
+.TH "WORKSWITCH" "1" "Oct 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
 wts-switch - Switch to a worktree and hand off a target
@@ -18,13 +18,19 @@ Start or move a process profile or process group to a target worktree.
 \&'restart' stops and re-starts the selected process or group.
 
 .PP
+\&'start' and 'restart' accept several worktrees to run the same target in each of
+them; 'start --all' uses every available worktree. Every worktree is resolved
+before anything starts. Processes receive WTS_WORKTREE, WTS_WORKTREE_DIR,
+WTS_BRANCH, and WTS_PROCESS, so commands can choose distinct ports.
+
+.PP
 Process groups are configured in .wts.yaml and each member process still runs in
 its own tmux pane.
 
 
 .SH OPTIONS
 \fB--attach\fP[=false]
-	attach/focus tmux after command
+	attach/focus tmux after command (single worktree only)
 
 .PP
 \fB--group\fP=""

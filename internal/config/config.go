@@ -17,7 +17,8 @@ import (
 
 const DefaultConfigFile = ".wts.yaml"
 
-var processNamePattern = regexp.MustCompile(`^[^\p{Cc}\p{Cf}]+$`)
+// Names may not end in ';', which tmux reads as a command separator and strips.
+var processNamePattern = regexp.MustCompile(`^[^\p{Cc}\p{Cf}]*[^\p{Cc}\p{Cf};]$`)
 var environmentNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func Load(configPath string) (*model.Project, error) {
@@ -233,7 +234,7 @@ func normalizeProcess(proc *model.Process) error {
 		return fmt.Errorf("name is required")
 	}
 	if !processNamePattern.MatchString(proc.Name) {
-		return fmt.Errorf("name %q is invalid (control and formatting characters are not allowed)", proc.Name)
+		return fmt.Errorf("name %q is invalid (control and formatting characters and a trailing ';' are not allowed)", proc.Name)
 	}
 
 	proc.Command = strings.TrimSpace(proc.Command)
@@ -265,7 +266,7 @@ func normalizeGroup(group *model.ProcessGroup, processes map[string]struct{}) er
 		return fmt.Errorf("name is required")
 	}
 	if !processNamePattern.MatchString(group.Name) {
-		return fmt.Errorf("name %q is invalid (control and formatting characters are not allowed)", group.Name)
+		return fmt.Errorf("name %q is invalid (control and formatting characters and a trailing ';' are not allowed)", group.Name)
 	}
 	if len(group.Processes) == 0 {
 		return fmt.Errorf("processes must contain at least one process name")

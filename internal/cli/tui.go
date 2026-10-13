@@ -88,8 +88,9 @@ type tuiModel struct {
 	styles              tuiStyles
 	spinner             spinner.Model
 	loading             bool
-	loadingDir          string
+	loadingDirs         map[string]bool
 	loadingMsg          string
+	marked              map[string]bool // worktree dirs that actions apply to
 	quitInfo            string
 	attachSpec          *runtime.AttachSpec
 	filterMode          bool
@@ -115,6 +116,8 @@ type tuiKeyMap struct {
 	ProcPrev    key.Binding
 	ProcNext    key.Binding
 	Filter      key.Binding
+	Mark        key.Binding
+	ClearMarks  key.Binding
 	CreateGroup key.Binding
 	Help        key.Binding
 	Quit        key.Binding
@@ -132,6 +135,8 @@ func newTUIKeyMap() tuiKeyMap {
 		ProcPrev:    key.NewBinding(key.WithKeys("h", "left", "["), key.WithHelp("h/←", "prev target")),
 		ProcNext:    key.NewBinding(key.WithKeys("l", "right", "]"), key.WithHelp("l/→", "next target")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search target")),
+		Mark:        key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "mark worktree")),
+		ClearMarks:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear marks")),
 		CreateGroup: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "new group")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
@@ -141,7 +146,7 @@ func newTUIKeyMap() tuiKeyMap {
 func (k tuiKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Next, k.Prev, k.Switch, k.Restart, k.Stop, k.StopAll, k.Attach},
-		{k.ProcPrev, k.ProcNext, k.Filter, k.CreateGroup, k.Help, k.Quit},
+		{k.ProcPrev, k.ProcNext, k.Mark, k.ClearMarks, k.Filter, k.CreateGroup, k.Help, k.Quit},
 	}
 }
 
@@ -244,6 +249,7 @@ func newTUIModel(rc *runtimeContext) *tuiModel {
 		targetIdx:           0,
 		createGroupInput:    createGroupInput,
 		createGroupSelected: map[string]bool{},
+		marked:              map[string]bool{},
 	}
 	m.applyColorScheme(true)
 
@@ -294,29 +300,21 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case actionDoneMsg:
-		m.loading = false
-		m.loadingDir = ""
-		m.loadingMsg = ""
+		m.stopLoading()
 		m.message = msg.text
 		m.messageIsErr = false
 		return m, tea.Batch(m.refreshStatusCmd(), m.fetchLogsCmd())
 	case actionErrMsg:
-		m.loading = false
-		m.loadingDir = ""
-		m.loadingMsg = ""
+		m.stopLoading()
 		m.message = msg.err.Error()
 		m.messageIsErr = true
 	case attachReadyMsg:
-		m.loading = false
-		m.loadingDir = ""
-		m.loadingMsg = ""
+		m.stopLoading()
 		m.attachSpec = &msg.spec
 		m.quitInfo = ""
 		return m, tea.Quit
 	case groupCreatedMsg:
-		m.loading = false
-		m.loadingDir = ""
-		m.loadingMsg = ""
+		m.stopLoading()
 		m.createGroupMode = false
 		m.createGroupSelected = map[string]bool{}
 		m.createGroupInput.Blur()
@@ -346,6 +344,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rc.manager.UpdateWorktrees(msg.worktrees)
 		}
 		m.rows = msg.rows
+		m.pruneMarks()
 		if len(msg.rows) == 0 {
 			m.idx = 0
 			return m, nil
@@ -423,6 +422,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.ProcPrev):
 			m.cycleTarget(-1)
 			return m, m.fetchLogsCmd()
+		case key.Matches(msg, m.keys.Mark):
+			m.toggleMark()
+			return m, m.fetchLogsCmd()
+		case key.Matches(msg, m.keys.ClearMarks):
+			m.marked = map[string]bool{}
 		case key.Matches(msg, m.keys.Filter):
 			return m, m.enterFilterMode()
 		case key.Matches(msg, m.keys.CreateGroup):
@@ -460,6 +464,69 @@ func (m *tuiModel) prev() {
 	}
 	m.idx = (m.idx - 1 + len(m.rows)) % len(m.rows)
 	m.logLines = nil
+}
+
+func (m *tuiModel) toggleMark() {
+	row := m.current()
+	if row == nil {
+		return
+	}
+	if row.Prunable {
+		m.message = row.Worktree + " is unavailable and cannot be marked"
+		m.messageIsErr = true
+		return
+	}
+	if m.marked[row.Dir] {
+		delete(m.marked, row.Dir)
+	} else {
+		m.marked[row.Dir] = true
+	}
+	m.message = ""
+	m.messageIsErr = false
+	// Marking usually precedes moving on to the next worktree to mark.
+	if m.idx < len(m.rows)-1 {
+		m.next()
+	}
+}
+
+// markedRows returns marked worktrees in list order.
+func (m *tuiModel) markedRows() []runtime.StatusRow {
+	rows := make([]runtime.StatusRow, 0, len(m.marked))
+	for _, row := range m.rows {
+		if m.marked[row.Dir] {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// pruneMarks forgets worktrees that were removed or became unavailable.
+func (m *tuiModel) pruneMarks() {
+	if len(m.marked) == 0 {
+		return
+	}
+	keep := make(map[string]bool, len(m.marked))
+	for _, row := range m.rows {
+		if m.marked[row.Dir] && !row.Prunable {
+			keep[row.Dir] = true
+		}
+	}
+	m.marked = keep
+}
+
+func (m *tuiModel) startLoading(message string, dirs ...string) {
+	m.loading = true
+	m.loadingMsg = message
+	m.loadingDirs = make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		m.loadingDirs[dir] = true
+	}
+}
+
+func (m *tuiModel) stopLoading() {
+	m.loading = false
+	m.loadingDirs = nil
+	m.loadingMsg = ""
 }
 
 func (m *tuiModel) current() *runtime.StatusRow {

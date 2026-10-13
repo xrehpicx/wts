@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +11,8 @@ import (
 	"time"
 )
 
-func TestClientRunsCompoundCommandInIsolatedTmux(t *testing.T) {
-	t.Parallel()
+func isolatedClient(t *testing.T) (*Client, string, string) {
+	t.Helper()
 	bin, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux is not installed")
@@ -35,6 +36,29 @@ func TestClientRunsCompoundCommandInIsolatedTmux(t *testing.T) {
 		defer cancel()
 		_, _ = client.runner.Run(ctx, bin, "kill-server")
 	})
+	return client, bin, dir
+}
+
+func waitForFile(ctx context.Context, t *testing.T, path, want string) {
+	t.Helper()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if data, err := os.ReadFile(path); err == nil && string(data) == want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			data, _ := os.ReadFile(path)
+			t.Fatalf("%s = %q, want %q: %v", path, data, want, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestClientRunsCompoundCommandInIsolatedTmux(t *testing.T) {
+	t.Parallel()
+	client, bin, dir := isolatedClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.EnsureSession(ctx, "test"); err != nil {
@@ -75,6 +99,58 @@ func TestClientRunsCompoundCommandInIsolatedTmux(t *testing.T) {
 		t.Fatal(err)
 	}
 	if exists, err := client.HasWindow(ctx, "test", "process"); err != nil || exists {
+		t.Fatalf("window still exists after stop: %v, %v", exists, err)
+	}
+}
+
+// The user's default shell must not matter: commands never pass through it.
+// Many processes share one detached window, and exit is reported promptly.
+func TestClientRunsManyPanesIndependentlyOfDefaultShell(t *testing.T) {
+	t.Parallel()
+	client, bin, dir := isolatedClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.EnsureSession(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	falseShell, err := exec.LookPath("false")
+	if err != nil {
+		t.Skip("false is not installed")
+	}
+	if _, err := client.runner.Run(ctx, bin, "set-option", "-g", "default-shell", falseShell); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]string{"VALUE": `C:\path\`}
+	for i := 0; i < 7; i++ {
+		marker := filepath.Join(dir, fmt.Sprintf("pane-%d", i))
+		command := `printf '%s' "$VALUE" > ` + shellQuote(marker) + `; exec sleep 30`
+		start := client.SplitWindowCommand
+		if i == 0 {
+			start = client.StartWindowCommand
+		}
+		if err := start(ctx, "test", "many", dir, "/bin/sh", command, env, ProcessPaneTitle(fmt.Sprintf("p%d", i))); err != nil {
+			t.Fatalf("start pane %d: %v", i, err)
+		}
+		waitForFile(ctx, t, marker, env["VALUE"])
+	}
+	panes, err := client.ListPanes(ctx, "test", "many")
+	if err != nil || len(panes) != 7 {
+		t.Fatalf("panes = %d, %v", len(panes), err)
+	}
+	for _, pane := range panes {
+		if !pane.Direct || client.ProcessExited(ctx, pane) {
+			t.Fatalf("expected a live direct pane: %#v", pane)
+		}
+	}
+
+	if err := client.StopPane(ctx, panes[0].ID, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.StopWindow(ctx, "test", "many", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := client.HasWindow(ctx, "test", "many"); err != nil || exists {
 		t.Fatalf("window still exists after stop: %v, %v", exists, err)
 	}
 }

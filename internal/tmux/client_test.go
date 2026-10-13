@@ -120,7 +120,7 @@ func TestStartWindowCleansUpWhenPaneHardeningFails(t *testing.T) {
 		case "list-windows":
 			return "", errors.New("can't find window: window")
 		case "new-window":
-			return "", nil
+			return "%1\n", nil
 		case "select-pane":
 			return "", errors.New("cannot set title")
 		case "kill-window":
@@ -308,5 +308,62 @@ func TestGetSessionOptionPreservesPathWhitespace(t *testing.T) {
 	got, err := client.GetSessionOption(context.Background(), "session", ActiveWorktreeOptionKey())
 	if err != nil || got != want {
 		t.Fatalf("option = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestStartWindowPassesCommandAsArguments(t *testing.T) {
+	t.Parallel()
+
+	var respawn []string
+	client := NewClient("tmux")
+	client.runner = runnerFunc(func(_ context.Context, _ string, args ...string) (string, error) {
+		switch args[0] {
+		case "list-windows":
+			return "", errors.New("can't find window: window")
+		case "new-window":
+			return "%7\n", nil
+		case "send-keys":
+			t.Fatalf("commands must not be typed into an interactive shell: %q", args)
+		case "respawn-pane":
+			respawn = args
+		}
+		return "", nil
+	})
+
+	command := `printf '%s\n' "$GREETING"`
+	err := client.StartWindowCommand(context.Background(), "session", "window", "/tmp/dir", "/bin/sh", command, map[string]string{"GREETING": `C:\`}, ProcessPaneTitle("api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"respawn-pane", "-k", "-t", "%7", "-c", "/tmp/dir", "--", "/bin/sh", "-lc", `export GREETING='C:\'; ` + command}
+	if strings.Join(respawn, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("respawn args = %q; want %q", respawn, want)
+	}
+}
+
+func TestProcessExitedTrustsDirectPaneLiveness(t *testing.T) {
+	t.Parallel()
+
+	childless := func(string) bool { return true }
+	if ProcessExited(PaneInfo{PID: "1", Command: "sh", Direct: true}, childless) {
+		t.Fatal("a live direct pane running a shell loop has not exited")
+	}
+	if !ProcessExited(PaneInfo{PID: "1", Command: "sh", Direct: true, Dead: true}, childless) {
+		t.Fatal("a dead pane has exited")
+	}
+	if !ProcessExited(PaneInfo{PID: "1", Command: "fish"}, childless) {
+		t.Fatal("a legacy pane back at an idle shell has exited")
+	}
+	if ProcessExited(PaneInfo{PID: "1", Command: "node"}, childless) {
+		t.Fatal("a legacy pane running a program has not exited")
+	}
+}
+
+func TestParsePaneListReadsLaunchMarker(t *testing.T) {
+	t.Parallel()
+
+	panes := parsePaneList("%0\tapi\twts:api\t1\tsh\t0\tdirect\n%1\tweb\twts:web\t2\tfish\t0\t")
+	if len(panes) != 2 || !panes[0].Direct || panes[1].Direct {
+		t.Fatalf("unexpected launch markers: %#v", panes)
 	}
 }

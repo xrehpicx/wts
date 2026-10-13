@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -147,5 +148,34 @@ func TestDiscoverContextWithRealWorktrees(t *testing.T) {
 	cancel()
 	if _, err := DiscoverContext(ctx, repo); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled discovery = %v", err)
+	}
+}
+
+func TestResolveMatchesPathThroughSymlink(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	items := []Worktree{{Name: "real", Dir: physical}}
+	wt, err := Resolve(items, link)
+	if err != nil {
+		t.Fatalf("resolve through symlink: %v", err)
+	}
+	if wt.Dir != physical {
+		t.Fatalf("resolved %q; want %q", wt.Dir, physical)
 	}
 }

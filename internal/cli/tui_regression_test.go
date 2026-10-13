@@ -283,6 +283,43 @@ func TestTUIGroupSaveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTUIGroupSaveKeepsEditsMadeWhileOpen(t *testing.T) {
+	m := regressionTUI(t)
+	path := filepath.Join(t.TempDir(), ".wts.yaml")
+	project, err := config.Save(path, m.rc.project.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.rc.project = project
+	m.rc.newBackend = func() runtime.Backend { return newTUITestBackend() }
+
+	edited := project.Config()
+	edited.Processes = append(edited.Processes, model.Process{Name: "worker", Command: "go run ./worker"})
+	if _, err := config.Save(path, edited); err != nil {
+		t.Fatal(err)
+	}
+
+	m.enterCreateGroupMode()
+	m.createGroupInput.SetValue("backend")
+	m.createGroupSelected = map[string]bool{"api": true}
+	for _, msg := range runCmdMessages(m.saveCreateGroupCmd()) {
+		if e, ok := msg.(actionErrMsg); ok {
+			t.Fatal(e.err)
+		}
+		m.Update(msg)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded.Process("worker"); err != nil {
+		t.Fatal("saving a group discarded a process added while the TUI was open")
+	}
+	if _, err := m.rc.project.Process("worker"); err != nil {
+		t.Fatal("the TUI should pick up the reloaded configuration")
+	}
+}
+
 func TestTUIGroupValidationErrorKeepsEditorOpen(t *testing.T) {
 	m := regressionTUI(t)
 	m.enterCreateGroupMode()

@@ -74,7 +74,7 @@ processes:
   - name: run
     command: 'while true; do echo "run tick"; sleep 0.1; done'
   - name: heartbeat
-    command: 'while true; do echo "heartbeat tick"; sleep 0.1; done'
+    command: 'while true; do echo "heartbeat $WTS_WORKTREE tick"; sleep 0.1; done'
 groups:
   - name: dev
     processes: [run, heartbeat]
@@ -110,6 +110,20 @@ groups:
 	})
 
 	run(t, projectDir, binary, "--config", configPath, "stop", "--all")
+	waitForStatus(t, projectDir, binary, configPath, func(rows []wtsruntime.StatusRow) bool {
+		return len(rows) == 2 && !rows[0].Running && !rows[1].Running
+	})
+
+	// The same group runs side by side in every worktree, each process knowing
+	// which worktree it serves.
+	run(t, projectDir, binary, "--config", configPath, "start", "--all", "--group", "dev")
+	waitForStatus(t, projectDir, binary, configPath, func(rows []wtsruntime.StatusRow) bool {
+		return len(rows) == 2 && len(rows[0].Processes) == 2 && len(rows[1].Processes) == 2
+	})
+	waitForLogs(t, projectDir, binary, configPath, featureDir, "heartbeat", "heartbeat "+filepath.Base(featureDir)+" tick")
+	waitForLogs(t, projectDir, binary, configPath, projectDir, "heartbeat", "heartbeat "+filepath.Base(projectDir)+" tick")
+
+	run(t, projectDir, binary, "--config", configPath, "stop", projectDir, featureDir, "--group", "dev")
 	waitForStatus(t, projectDir, binary, configPath, func(rows []wtsruntime.StatusRow) bool {
 		return len(rows) == 2 && !rows[0].Running && !rows[1].Running
 	})

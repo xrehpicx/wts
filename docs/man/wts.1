@@ -1,5 +1,5 @@
 .nh
-.TH "WORKSWITCH" "1" "Sep 2026" "workswitch" "workswitch Manual"
+.TH "WORKSWITCH" "1" "Oct 2026" "workswitch" "workswitch Manual"
 
 .SH NAME
 wts - workswitch (wts: worktree switch) process handoff for git worktrees
@@ -34,6 +34,8 @@ wts
   wts list
   wts switch repo-main --process api
   wts switch repo-main --group dev
+  wts start repo-main repo-agent --group dev
+  wts start --all --process api
   wts next --process demo-script
   wts status --json
   wts tui

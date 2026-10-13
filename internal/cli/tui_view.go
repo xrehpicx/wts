@@ -54,7 +54,9 @@ func (m *tuiModel) renderHeader(width int) string {
 	right := m.styles.subtitle.Render(fmt.Sprintf("%d worktrees", len(m.rows))) + " "
 	lines := []string{headerRow(left, right, width)}
 	selected := "No worktree selected"
-	if row := m.current(); row != nil {
+	if marked := len(m.markedRows()); marked > 0 {
+		selected = pluralWorktrees(marked) + " marked"
+	} else if row := m.current(); row != nil {
 		selected = row.Worktree
 	}
 	targetLabel := "No target"
@@ -148,16 +150,13 @@ func (m *tuiModel) renderListPanel(width, height int) string {
 	for i := start; i < end; i++ {
 		row := m.rows[i]
 
-		// --- Line 1: cursor + dot + name + badge ---
-		cursor := "  "
-		if i == m.idx {
-			cursor = "▸ "
-		}
+		// --- Line 1: cursor + mark + dot + name + badge ---
+		cursor := m.rowPrefix(i, row.Dir)
 
 		var dot string
 		if row.Prunable {
 			dot = m.styles.exitedDot.Render("⚠")
-		} else if m.loading && row.Dir == m.loadingDir {
+		} else if m.loading && m.loadingDirs[row.Dir] {
 			dot = m.spinner.View()
 		} else if row.Running && row.Exited {
 			dot = m.styles.exitedDot.Render("●")
@@ -256,10 +255,7 @@ func (m *tuiModel) renderCompactListPanel(width, height int) string {
 	lines := make([]string, 0, capacity)
 	for i := m.listOffset; i < min(len(m.rows), m.listOffset+capacity); i++ {
 		row := m.rows[i]
-		prefix := "  "
-		if i == m.idx {
-			prefix = "▸ "
-		}
+		prefix := m.rowPrefix(i, row.Dir)
 		state := "○"
 		if row.Prunable {
 			state = "!"
@@ -280,6 +276,18 @@ func (m *tuiModel) renderCompactListPanel(width, height int) string {
 		lines = append(lines, style.Render(truncateLine(line, maxW)))
 	}
 	return m.renderPanel(fmt.Sprintf("Worktrees · %d/%d", m.idx+1, len(m.rows)), lines, width, height, true)
+}
+
+// rowPrefix renders the cursor and mark columns of a worktree row.
+func (m *tuiModel) rowPrefix(i int, dir string) string {
+	cursor, mark := " ", " "
+	if i == m.idx {
+		cursor = "▸"
+	}
+	if m.marked[dir] {
+		mark = "✓"
+	}
+	return cursor + mark
 }
 
 func visibleWorktreeRange(total, selected, offset, lineCapacity int) (int, int) {
@@ -563,7 +571,7 @@ func renderBordered(style lipgloss.Style, lines []string, width, height int) str
 }
 
 func (m *tuiModel) renderFooter(width int) string {
-	text := "↑↓ worktree · ←→ target · enter start · / search · g group · ? help · q quit"
+	text := "↑↓ worktree · ←→ target · enter start · space mark · / search · ? help · q quit"
 	switch {
 	case m.loading:
 		text = "Working… · ctrl+c quit"
@@ -576,6 +584,11 @@ func (m *tuiModel) renderFooter(width int) string {
 		text = "↑↓ match · enter select · esc cancel"
 	case m.showAll:
 		text = "? close help · q quit"
+	case len(m.marked) > 0:
+		text = "space mark · enter start · r restart · x stop · X stop all · esc clear marks"
+		if width < 72 {
+			text = "space mark · ↵ start · x stop · esc clear"
+		}
 	case width < 72:
 		text = "↑↓ tree · ←→ target · ↵ start · ? help · q quit"
 	}

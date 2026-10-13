@@ -366,3 +366,20 @@ func TestSavePreservesFileAndCallerOnValidationFailure(t *testing.T) {
 		t.Fatal("failed save mutated caller configuration")
 	}
 }
+
+func TestMarshalRejectsNamesEndingInTmuxSeparator(t *testing.T) {
+	t.Parallel()
+
+	for _, cfg := range []model.Config{
+		{Version: model.CurrentVersion, Processes: []model.Process{{Name: "web;", Command: "pnpm dev"}}},
+		{Version: model.CurrentVersion, Processes: []model.Process{{Name: "web", Command: "pnpm dev"}}, Groups: []model.ProcessGroup{{Name: "dev;", Processes: []string{"web"}}}},
+	} {
+		if _, err := Marshal(cfg); err == nil || !strings.Contains(err.Error(), "trailing ';'") {
+			t.Fatalf("expected trailing separator to be rejected, got %v", err)
+		}
+	}
+	inner := model.Config{Version: model.CurrentVersion, Processes: []model.Process{{Name: "db;migrate", Command: "true"}}}
+	if _, err := Marshal(inner); err != nil {
+		t.Fatalf("a separator inside a name is preserved by tmux: %v", err)
+	}
+}

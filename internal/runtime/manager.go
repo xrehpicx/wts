@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -24,17 +25,17 @@ type Backend interface {
 	StopWindow(ctx context.Context, session, window string, timeout time.Duration) error
 	SetSessionOption(ctx context.Context, session, key, value string) error
 	GetSessionOption(ctx context.Context, session, key string) (string, error)
-	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
-	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
+	ListWindows(ctx context.Context, session string) ([]string, error)
 	Attach(ctx context.Context, session, window, paneID string) error
 
-	SetPaneTitle(ctx context.Context, session, window, title string) error
 	SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
 	ListPanes(ctx context.Context, session, window string) ([]tmux.PaneInfo, error)
 	StopPane(ctx context.Context, paneID string, timeout time.Duration) error
 	CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error)
 	PaneExitedByPID(ctx context.Context, pid string) bool
 }
+
+var _ Backend = (*tmux.Client)(nil)
 
 type Manager struct {
 	project    *model.Project
@@ -172,6 +173,58 @@ func (m *Manager) Restart(ctx context.Context, worktree string, opts RunOptions)
 	return m.activate(ctx, worktree, opts, true, false)
 }
 
+// AvailableWorktrees returns the worktrees that can run processes: bare and
+// prunable entries are omitted.
+func (m *Manager) AvailableWorktrees() []gitwt.Worktree {
+	items := m.ListWorktrees()
+	available := items[:0]
+	for _, wt := range items {
+		if !wt.Bare && !wt.Prunable {
+			available = append(available, wt)
+		}
+	}
+	return available
+}
+
+// ForEachWorktree applies fn to every selected worktree. All selectors are
+// resolved before fn first runs, so a typo cannot leave a partial run, and a
+// worktree named twice is visited once. A failure in one worktree does not
+// prevent the others; failures are joined and labelled with the worktree name.
+func (m *Manager) ForEachWorktree(ctx context.Context, selectors []string, fn func(context.Context, gitwt.Worktree) error) error {
+	if len(selectors) == 0 {
+		return fmt.Errorf("at least one worktree is required")
+	}
+	selected := make([]gitwt.Worktree, 0, len(selectors))
+	seen := make(map[string]bool, len(selectors))
+	for _, selector := range selectors {
+		wt, err := m.resolveWorktree(selector)
+		if err != nil {
+			return err
+		}
+		dir := filepath.Clean(wt.Dir)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		selected = append(selected, *wt)
+	}
+
+	if len(selected) == 1 {
+		return fn(ctx, selected[0])
+	}
+	var errs []error
+	for _, wt := range selected {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if err := fn(ctx, wt); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", wt.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions, forceRestart, preemptive bool) error {
 	wt, err := m.resolveWorktree(worktree)
 	if err != nil {
@@ -203,78 +256,27 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		}
 	}
 
-	ref, windowExists, err := m.locateWindow(ctx, wt.Dir)
+	startErr := m.startTarget(ctx, wt, target, forceRestart)
+
+	// Record what actually runs, even after a partial failure: a switch has
+	// already stopped the previous worktree, so the markers must not keep
+	// pointing at it while processes run untracked here.
+	ref, running, err := m.locateWindow(ctx, wt.Dir)
 	if err != nil {
-		return err
+		return errors.Join(startErr, err)
 	}
-
-	for _, processName := range target.ProcessNames {
-		proc, err := m.project.Process(processName)
-		if err != nil {
-			return err
+	switch {
+	case running:
+		if err := m.setActiveState(ctx, wt.Dir, target); err != nil {
+			return errors.Join(startErr, err)
 		}
-		paneTitle := tmux.ProcessPaneTitle(proc.Name)
-
-		var pane *tmux.PaneInfo
-		if windowExists {
-			pane, err = m.findProcessPane(ctx, wt, proc.Name)
-			if err != nil {
-				return fmt.Errorf("find process %q in %q: %w", proc.Name, wt.Name, err)
-			}
-
-			if pane != nil && (forceRestart || m.paneExited(ctx, *pane)) {
-				timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-				if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
-					return fmt.Errorf("stop process %q in %q: %w", proc.Name, wt.Name, err)
-				}
-				windowExists, err = m.backend.HasWindow(ctx, ref.Session, ref.Window)
-				if err != nil {
-					return err
-				}
-				if !windowExists {
-					ref, windowExists, err = m.locateWindow(ctx, wt.Dir)
-					if err != nil {
-						return err
-					}
-				}
-				pane = nil
-			}
-			if pane != nil {
-				continue
-			}
-		}
-
-		if windowExists {
-			if err := m.backend.SplitWindowCommand(
-				ctx, ref.Session, ref.Window,
-				wt.Dir, m.project.Defaults.Shell,
-				proc.Command, proc.Env, paneTitle,
-			); err != nil {
-				return fmt.Errorf("add process %q to %q: %w", proc.Name, wt.Name, err)
-			}
-		} else {
-			if err := m.backend.StartWindowCommand(
-				ctx, ref.Session, ref.Window,
-				wt.Dir, m.project.Defaults.Shell,
-				proc.Command, proc.Env, paneTitle,
-			); err != nil {
-				return fmt.Errorf("start worktree %q: %w", wt.Name, err)
-			}
-			windowExists = true
+	case preemptive:
+		if err := m.clearActiveOptions(ctx, m.session); err != nil {
+			return errors.Join(startErr, err)
 		}
 	}
-
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveWorktreeOptionKey(), wt.Dir); err != nil {
-		return err
-	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveProcessOptionKey(), target.ProcessNames[0]); err != nil {
-		return err
-	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetKindOptionKey(), string(target.Kind)); err != nil {
-		return err
-	}
-	if err := m.backend.SetSessionOption(ctx, m.session, tmux.ActiveTargetNameOptionKey(), target.Name); err != nil {
-		return err
+	if startErr != nil {
+		return startErr
 	}
 
 	if opts.Attach {
@@ -297,6 +299,105 @@ func (m *Manager) activate(ctx context.Context, worktree string, opts RunOptions
 		}
 	}
 
+	return nil
+}
+
+// startTarget starts every target process that is not already running in wt.
+// Stale panes (restarted or exited) are stopped together so they share one
+// timeout instead of each waiting in turn.
+func (m *Manager) startTarget(ctx context.Context, wt *gitwt.Worktree, target model.Target, forceRestart bool) error {
+	ref, windowExists, err := m.locateWindow(ctx, wt.Dir)
+	if err != nil {
+		return err
+	}
+
+	if windowExists {
+		var stale []tmux.PaneInfo
+		for _, processName := range target.ProcessNames {
+			pane, err := m.findProcessPane(ctx, wt, processName)
+			if err != nil {
+				return fmt.Errorf("find process %q in %q: %w", processName, wt.Name, err)
+			}
+			if pane != nil && (forceRestart || m.paneExited(ctx, *pane)) {
+				stale = append(stale, *pane)
+			}
+		}
+		if len(stale) > 0 {
+			if err := m.stopPanes(ctx, stale); err != nil {
+				return fmt.Errorf("stop processes in %q: %w", wt.Name, err)
+			}
+			if ref, windowExists, err = m.locateWindow(ctx, wt.Dir); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, processName := range target.ProcessNames {
+		proc, err := m.project.Process(processName)
+		if err != nil {
+			return err
+		}
+		if windowExists {
+			pane, err := m.findProcessPane(ctx, wt, proc.Name)
+			if err != nil {
+				return fmt.Errorf("find process %q in %q: %w", proc.Name, wt.Name, err)
+			}
+			if pane != nil {
+				continue
+			}
+		}
+
+		paneTitle := tmux.ProcessPaneTitle(proc.Name)
+		env := processEnv(wt, proc)
+		if windowExists {
+			if err := m.backend.SplitWindowCommand(
+				ctx, ref.Session, ref.Window,
+				wt.Dir, m.project.Defaults.Shell,
+				proc.Command, env, paneTitle,
+			); err != nil {
+				return fmt.Errorf("add process %q to %q: %w", proc.Name, wt.Name, err)
+			}
+			continue
+		}
+		if err := m.backend.StartWindowCommand(
+			ctx, ref.Session, ref.Window,
+			wt.Dir, m.project.Defaults.Shell,
+			proc.Command, env, paneTitle,
+		); err != nil {
+			return fmt.Errorf("start worktree %q: %w", wt.Name, err)
+		}
+		windowExists = true
+	}
+	return nil
+}
+
+// stopPanes interrupts panes concurrently so they share one timeout.
+func (m *Manager) stopPanes(ctx context.Context, panes []tmux.PaneInfo) error {
+	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
+	errs := make([]error, len(panes))
+	var wg sync.WaitGroup
+	for i, pane := range panes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = m.backend.StopPane(ctx, pane.ID, timeout)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+func (m *Manager) setActiveState(ctx context.Context, dir string, target model.Target) error {
+	for _, option := range [][2]string{
+		{tmux.ActiveWorktreeOptionKey(), dir},
+		{tmux.ActiveProcessOptionKey(), target.ProcessNames[0]},
+		{tmux.ActiveTargetKindOptionKey(), string(target.Kind)},
+		{tmux.ActiveTargetNameOptionKey(), target.Name},
+	} {
+		if err := m.backend.SetSessionOption(ctx, m.session, option[0], option[1]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -416,13 +517,7 @@ func (m *Manager) matchProcessPane(ctx context.Context, session string, wt *gitw
 }
 
 func (m *Manager) paneExited(ctx context.Context, pane tmux.PaneInfo) bool {
-	if pane.Dead {
-		return true
-	}
-	if pane.PID != "" {
-		return m.backend.PaneExitedByPID(ctx, pane.PID)
-	}
-	return tmux.IsShellCommand(pane.Command)
+	return tmux.ProcessExited(pane, func(pid string) bool { return m.backend.PaneExitedByPID(ctx, pid) })
 }
 
 // StopWorktree stops every process in the worktree: each pane in each window
@@ -482,8 +577,6 @@ func (m *Manager) StopGroup(ctx context.Context, worktree, groupName string) err
 		return err
 	}
 
-	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
-
 	// Collect all panes belonging to the group's processes.
 	memberSet := make(map[string]bool, len(group.Processes))
 	for _, name := range group.Processes {
@@ -504,10 +597,8 @@ func (m *Manager) StopGroup(ctx context.Context, worktree, groupName string) err
 	if len(toStop) == 0 {
 		return fmt.Errorf("group %q not running in worktree %q", group.Name, wt.Name)
 	}
-	for _, pane := range toStop {
-		if err := m.backend.StopPane(ctx, pane.ID, timeout); err != nil {
-			return err
-		}
+	if err := m.stopPanes(ctx, toStop); err != nil {
+		return err
 	}
 	return m.syncActiveStateAfterStop(ctx, wt, m.foreignSessions(refs), group.Processes)
 }
@@ -532,6 +623,8 @@ func (m *Manager) StopActive(ctx context.Context) error {
 	return m.clearActiveOptions(ctx, m.session)
 }
 
+// StopAll stops every discovered worktree, then any worktree window left in
+// the session by worktrees that have since been removed.
 func (m *Manager) StopAll(ctx context.Context) error {
 	if err := m.ensureReady(ctx); err != nil {
 		return err
@@ -541,6 +634,19 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		wt := &worktrees[i]
 		if err := m.stopWorktreeProcess(ctx, wt); err != nil {
 			return err
+		}
+	}
+	windows, err := m.backend.ListWindows(ctx, m.session)
+	if err != nil {
+		return err
+	}
+	timeout := time.Duration(m.project.Defaults.StopTimeoutSec) * time.Second
+	for _, window := range windows {
+		if !tmux.IsWorktreeWindow(window) {
+			continue
+		}
+		if err := m.backend.StopWindow(ctx, m.session, window, timeout); err != nil {
+			return fmt.Errorf("stop window %q: %w", window, err)
 		}
 	}
 	return m.clearActiveOptions(ctx, m.session)
@@ -573,8 +679,16 @@ func (m *Manager) Logs(ctx context.Context, worktree string, processName string,
 		return m.backend.CapturePaneByID(ctx, pane.ID, lines)
 	}
 
-	// Default: capture from the whole window (first pane).
-	return m.backend.CapturePane(ctx, ref.Session, ref.Window, lines)
+	// Default: the first pane. Capturing the window would follow whichever
+	// pane was last selected, for example by attaching.
+	panes, err := m.backend.ListPanes(ctx, ref.Session, ref.Window)
+	if err != nil {
+		return "", err
+	}
+	if len(panes) == 0 {
+		return "", fmt.Errorf("worktree %q has no processes", wt.Name)
+	}
+	return m.backend.CapturePaneByID(ctx, panes[0].ID, lines)
 }
 
 // StatusForWorktrees reads status for a discovery snapshot without changing the
@@ -865,6 +979,20 @@ func (m *Manager) syncActiveStateAfterStopTargets(ctx context.Context, session s
 		return err
 	}
 	return m.backend.SetSessionOption(ctx, session, tmux.ActiveTargetNameOptionKey(), "")
+}
+
+// processEnv describes where a process runs so the same command can adapt per
+// worktree, for example by deriving a port. Configured values take precedence.
+func processEnv(wt *gitwt.Worktree, proc *model.Process) map[string]string {
+	env := make(map[string]string, len(proc.Env)+4)
+	env["WTS_WORKTREE"] = wt.Name
+	env["WTS_WORKTREE_DIR"] = wt.Dir
+	env["WTS_BRANCH"] = wt.Branch
+	env["WTS_PROCESS"] = proc.Name
+	for key, value := range proc.Env {
+		env[key] = value
+	}
+	return env
 }
 
 func stringInSlice(value string, items []string) bool {

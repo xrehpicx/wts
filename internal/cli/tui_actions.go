@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -15,28 +16,72 @@ import (
 
 // --- Async actions ---
 
-func (m *tuiModel) switchCurrentCmd() tea.Cmd {
-	row := m.current()
-	if row == nil {
-		return nil
+// markedCmd runs fn in each marked worktree. Marked actions are additive: they
+// never preempt the active worktree, so one target can run in many worktrees.
+func (m *tuiModel) markedCmd(rows []runtime.StatusRow, progress, done string, fn func(context.Context, *runtime.Manager, string) error) tea.Cmd {
+	selectors := make([]string, 0, len(rows))
+	for _, row := range rows {
+		selectors = append(selectors, row.Dir)
 	}
+	suffix := " in " + pluralWorktrees(len(rows))
+	m.startLoading(progress+suffix+"...", selectors...)
+	manager, ctx := m.rc.manager, m.rc.context()
+	action := func() tea.Msg {
+		err := manager.ForEachWorktree(ctx, selectors, func(ctx context.Context, wt gitwt.Worktree) error {
+			return fn(ctx, manager, wt.Dir)
+		})
+		if err != nil {
+			return actionErrMsg{err: err}
+		}
+		return actionDoneMsg{text: done + suffix}
+	}
+	return tea.Batch(m.spinner.Tick, action)
+}
+
+func pluralWorktrees(n int) string {
+	if n == 1 {
+		return "1 worktree"
+	}
+	return fmt.Sprintf("%d worktrees", n)
+}
+
+func (m *tuiModel) requireTarget() (model.Target, bool) {
 	target, ok := m.selectedTarget()
 	if !ok {
 		m.message = "select a process or group first with ←/→"
 		m.messageIsErr = true
+	}
+	return target, ok
+}
+
+func (m *tuiModel) switchCurrentCmd() tea.Cmd {
+	if marked := m.markedRows(); len(marked) > 0 {
+		target, ok := m.requireTarget()
+		if !ok {
+			return nil
+		}
+		label := formatTargetLabel(target)
+		return m.markedCmd(marked, "starting "+label, "started "+label, func(ctx context.Context, manager *runtime.Manager, dir string) error {
+			return manager.Start(ctx, dir, runOptionsForTarget(target))
+		})
+	}
+	row := m.current()
+	if row == nil {
+		return nil
+	}
+	target, ok := m.requireTarget()
+	if !ok {
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
 
 	// If the worktree has at least one live process, use Start (additive).
 	// Otherwise use Switch (preemptive: stops the other active worktree).
 	useAdditive := row.Running && !row.Exited
 	if useAdditive {
-		m.loadingMsg = "starting " + formatTargetLabel(target) + " in " + name + "..."
+		m.startLoading("starting "+formatTargetLabel(target)+" in "+name+"...", dir)
 	} else {
-		m.loadingMsg = "switching " + formatTargetLabel(target) + " to " + name + "..."
+		m.startLoading("switching "+formatTargetLabel(target)+" to "+name+"...", dir)
 	}
 
 	manager, ctx := m.rc.manager, m.rc.context()
@@ -60,20 +105,26 @@ func (m *tuiModel) switchCurrentCmd() tea.Cmd {
 }
 
 func (m *tuiModel) restartCurrentCmd() tea.Cmd {
+	if marked := m.markedRows(); len(marked) > 0 {
+		target, ok := m.requireTarget()
+		if !ok {
+			return nil
+		}
+		label := formatTargetLabel(target)
+		return m.markedCmd(marked, "restarting "+label, "restarted "+label, func(ctx context.Context, manager *runtime.Manager, dir string) error {
+			return manager.Restart(ctx, dir, runOptionsForTarget(target))
+		})
+	}
 	row := m.current()
 	if row == nil {
 		return nil
 	}
-	target, ok := m.selectedTarget()
+	target, ok := m.requireTarget()
 	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "restarting " + formatTargetLabel(target) + " in " + name + "..."
+	m.startLoading("restarting "+formatTargetLabel(target)+" in "+name+"...", dir)
 	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
 		if err := manager.Restart(ctx, dir, runOptionsForTarget(target)); err != nil {
@@ -84,15 +135,41 @@ func (m *tuiModel) restartCurrentCmd() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, action)
 }
 
+func stopTarget(ctx context.Context, manager *runtime.Manager, dir string, target model.Target) error {
+	if target.Kind == model.TargetGroup {
+		return manager.StopGroup(ctx, dir, target.Name)
+	}
+	return manager.StopProcess(ctx, dir, target.Name)
+}
+
 func (m *tuiModel) stopCurrentCmd() tea.Cmd {
+	if marked := m.markedRows(); len(marked) > 0 {
+		target, ok := m.requireTarget()
+		if !ok {
+			return nil
+		}
+		label := formatTargetLabel(target)
+		running := marked[:0:0]
+		for i := range marked {
+			if managed, _ := targetProcessState(&marked[i], target); managed {
+				running = append(running, marked[i])
+			}
+		}
+		if len(running) == 0 {
+			m.message = label + " is not running in any marked worktree"
+			m.messageIsErr = true
+			return nil
+		}
+		return m.markedCmd(running, "stopping "+label, "stopped "+label, func(ctx context.Context, manager *runtime.Manager, dir string) error {
+			return stopTarget(ctx, manager, dir, target)
+		})
+	}
 	row := m.current()
 	if row == nil {
 		return nil
 	}
-	target, ok := m.selectedTarget()
+	target, ok := m.requireTarget()
 	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
 		return nil
 	}
 	if managed, _ := targetProcessState(row, target); !managed {
@@ -101,18 +178,10 @@ func (m *tuiModel) stopCurrentCmd() tea.Cmd {
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "stopping " + formatTargetLabel(target) + " in " + name + "..."
+	m.startLoading("stopping "+formatTargetLabel(target)+" in "+name+"...", dir)
 	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
-		var err error
-		if target.Kind == model.TargetGroup {
-			err = manager.StopGroup(ctx, dir, target.Name)
-		} else {
-			err = manager.StopProcess(ctx, dir, target.Name)
-		}
-		if err != nil {
+		if err := stopTarget(ctx, manager, dir, target); err != nil {
 			return actionErrMsg{err: err}
 		}
 		return actionDoneMsg{text: "stopped " + formatTargetLabel(target) + " in " + name}
@@ -121,14 +190,18 @@ func (m *tuiModel) stopCurrentCmd() tea.Cmd {
 }
 
 func (m *tuiModel) stopAllCurrentCmd() tea.Cmd {
+	if marked := m.markedRows(); len(marked) > 0 {
+		return m.markedCmd(marked, "stopping everything", "stopped everything", func(ctx context.Context, manager *runtime.Manager, dir string) error {
+			_, err := manager.StopWorktree(ctx, dir)
+			return err
+		})
+	}
 	row := m.current()
 	if row == nil {
 		return nil
 	}
 	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "stopping all in " + name + "..."
+	m.startLoading("stopping all in "+name+"...", dir)
 	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {
 		if _, err := manager.StopWorktree(ctx, dir); err != nil {
@@ -144,10 +217,8 @@ func (m *tuiModel) attachCurrentCmd() tea.Cmd {
 	if row == nil {
 		return nil
 	}
-	target, ok := m.selectedTarget()
+	target, ok := m.requireTarget()
 	if !ok {
-		m.message = "select a process or group first with ←/→"
-		m.messageIsErr = true
 		return nil
 	}
 	if managed, _ := targetProcessState(row, target); !managed {
@@ -157,9 +228,7 @@ func (m *tuiModel) attachCurrentCmd() tea.Cmd {
 	}
 
 	dir, name := row.Dir, row.Worktree
-	m.loading = true
-	m.loadingDir = dir
-	m.loadingMsg = "attaching " + formatTargetLabel(target) + " in " + name + "..."
+	m.startLoading("attaching "+formatTargetLabel(target)+" in "+name+"...", dir)
 
 	manager, ctx := m.rc.manager, m.rc.context()
 	action := func() tea.Msg {

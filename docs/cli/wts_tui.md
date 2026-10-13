@@ -13,6 +13,11 @@ member of a configured group. Groups are defined in .wts.yaml and appear in the
 target selector as [group] <name>. Press g to create a group and save it back
 to the current repo's .wts.yaml.
 
+Press space to mark worktrees. While any are marked, start, restart, stop, and
+stop-all apply to every marked worktree instead of the selected one, and never
+preempt other worktrees; esc clears the marks. Use this to run the same process
+or group in several worktrees at once.
+
 Search lists matching targets: use up/down to choose, enter to select, or esc to
 cancel. The group editor uses tab to change focus, space to toggle members, enter
 to save, and esc to cancel. Ctrl+c quits from any screen. Narrow terminals show a
@@ -24,6 +29,7 @@ Shortcuts:
   s/enter  start/switch target   a      attach tmux
   r        restart target
   x        stop selected target  /      search target by name
+  space    mark worktree         esc    clear marks
   g        create group in .wts.yaml
   X        stop all in worktree  ?      toggle full help
   q        quit

@@ -94,3 +94,15 @@ func TestProcessFromPaneTitle(t *testing.T) {
 		t.Fatalf("expected empty for empty title, got %q", name)
 	}
 }
+
+func TestIsWorktreeWindow(t *testing.T) {
+	t.Parallel()
+	if !IsWorktreeWindow(WindowName("/tmp/some dir")) {
+		t.Fatal("expected generated window name to be recognized")
+	}
+	for _, name := range []string{"", "ws_", "ws_main", "ws_zzzzzzzz_x", "shell", "ws_0123abcd"} {
+		if IsWorktreeWindow(name) {
+			t.Fatalf("%q must not be treated as a worktree window", name)
+		}
+	}
+}

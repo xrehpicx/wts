@@ -72,13 +72,31 @@ func Run(dir, configDir string) (*Result, error) {
 			return nil, fmt.Errorf("%s detector: %w", d.Name(), err)
 		}
 		if result != nil {
-			sort.Slice(result.Processes, func(i, j int) bool {
-				return result.Processes[i].Name < result.Processes[j].Name
-			})
+			sortProcesses(result.Processes)
 			return result, nil
 		}
 	}
 	return nil, nil
+}
+
+// defaultProcessRank orders the usual long-running entry points first: the
+// first process is the default target for commands that do not name one.
+var defaultProcessRank = map[string]int{"dev": 1, "start": 2, "serve": 3, "run": 4}
+
+func sortProcesses(processes []Process) {
+	rank := func(name string) int {
+		if r, ok := defaultProcessRank[name]; ok {
+			return r
+		}
+		return len(defaultProcessRank) + 1
+	}
+	sort.SliceStable(processes, func(i, j int) bool {
+		ri, rj := rank(processes[i].Name), rank(processes[j].Name)
+		if ri != rj {
+			return ri < rj
+		}
+		return processes[i].Name < processes[j].Name
+	})
 }
 
 func quoteShellArgument(value string) string {

@@ -45,6 +45,35 @@ build—the same verification performed on every GitHub push and pull request.
 This development command requires GNU Make and a POSIX-compatible shell; on
 Windows, `go test -shuffle=on ./...` runs the platform test suite directly.
 
+## Running a target in several worktrees
+
+`switch` hands a process or group to one worktree and stops the previously active
+one. To run the same process or group side by side, use `start`, which is
+additive and accepts several worktrees:
+
+```bash
+wts start repo-main repo-feature --group dev
+wts start --all --process api       # every available worktree
+wts restart repo-main repo-feature --group dev
+wts stop repo-main repo-feature --group dev
+```
+
+Every worktree is resolved before anything starts, so a misspelled name changes
+nothing. In the TUI, mark worktrees with `space` and press `enter`.
+
+Each process receives `WTS_WORKTREE`, `WTS_WORKTREE_DIR`, `WTS_BRANCH`, and
+`WTS_PROCESS`, so copies running at the same time can avoid conflicts, for
+example by choosing a port per worktree:
+
+```yaml
+processes:
+  - name: web
+    # A stable port per worktree, between 3000 and 3999
+    command: PORT=$((3000 + $(printf %s "$WTS_WORKTREE" | cksum | cut -d' ' -f1) % 1000)) pnpm dev
+```
+
+Values set under `env` take precedence over these variables.
+
 ## TUI controls
 
 The header shows the selected worktree and target, so the destination of each
@@ -58,7 +87,11 @@ terminals use a compact worktree list above the output.
 | `enter` / `s` | Start the target, or switch it to the selected worktree |
 | `r` / `x` | Restart / stop the selected target |
 | `X` | Stop all processes in the selected worktree |
+
+While worktrees are marked, `enter`, `r`, `x`, and `X` act on every marked
+worktree instead of the selected one, and never stop other worktrees.
 | `a` | Attach to the selected target in tmux |
+| `space` | Mark a worktree; `esc` clears marks |
 | `/` | Search targets; use `↑` / `↓` to choose a match |
 | `g` | Create a group; `tab` changes focus, `space` selects members, `enter` saves |
 | `esc` | Cancel search or group creation |

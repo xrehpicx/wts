@@ -37,8 +37,11 @@ func DiscoverContext(ctx context.Context, repoRoot string) ([]Worktree, error) {
 		return nil, fmt.Errorf("resolve repo root: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain", "-z")
-	out, err := cmd.CombinedOutput()
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain", "-z").Output()
+	if err != nil && ctx.Err() == nil {
+		// -z needs Git 2.36; older Git still lists paths without newlines.
+		out, err = exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("list git worktrees: %w", ctx.Err())
@@ -100,6 +103,15 @@ func Resolve(items []Worktree, selector string) (*Worktree, error) {
 		for i := range items {
 			if filepath.Clean(items[i].Dir) == cleanAbs {
 				return &items[i], nil
+			}
+		}
+		// Git reports physical paths, so a selector reached through a symlink
+		// (such as macOS /var -> /private/var) only matches once resolved.
+		if real, err := filepath.EvalSymlinks(cleanAbs); err == nil {
+			for i := range items {
+				if itemReal, err := filepath.EvalSymlinks(items[i].Dir); err == nil && itemReal == real {
+					return &items[i], nil
+				}
 			}
 		}
 	}

@@ -19,28 +19,9 @@ type PaneInfo struct {
 	PID     string
 	Command string // current foreground command name
 	Dead    bool   // true when pane process has exited (remain-on-exit)
-}
-
-type Backend interface {
-	EnsureTmux(ctx context.Context) error
-	EnsureSession(ctx context.Context, session string) error
-	HasWindow(ctx context.Context, session, window string) (bool, error)
-	FindWindowSessions(ctx context.Context, window string) ([]string, error)
-	StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
-	StopWindow(ctx context.Context, session, window string, timeout time.Duration) error
-	SetSessionOption(ctx context.Context, session, key, value string) error
-	GetSessionOption(ctx context.Context, session, key string) (string, error)
-	CapturePane(ctx context.Context, session, window string, lines int) (string, error)
-	PaneCurrentCommand(ctx context.Context, session, window string) (string, error)
-	Attach(ctx context.Context, session, window, paneID string) error
-
-	// Multi-process pane management
-	SetPaneTitle(ctx context.Context, session, window, title string) error
-	SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error
-	ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error)
-	StopPane(ctx context.Context, paneID string, timeout time.Duration) error
-	CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error)
-	PaneExitedByPID(ctx context.Context, pid string) bool
+	// Direct panes run their command as the pane process, so Dead alone
+	// reports exit. Older panes typed it into an interactive shell instead.
+	Direct bool
 }
 
 type runner interface {
@@ -163,6 +144,29 @@ func parseWindowSessions(output, window string) []string {
 	return sessions
 }
 
+// placeholderCommand holds a new pane open until it is configured and the real
+// command replaces it. Two arguments make tmux execute it directly rather than
+// through the user's default shell.
+var placeholderCommand = []string{"cat", "-"}
+
+// ListWindows returns the window names in session, or none if it is missing.
+func (c *Client) ListWindows(ctx context.Context, session string) ([]string, error) {
+	output, err := c.runner.Run(ctx, c.bin, "list-windows", "-t", SessionTarget(session), "-F", "#{window_name}")
+	if err != nil {
+		if isMissingTmuxTarget(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list windows in session %q: %w", session, err)
+	}
+	var names []string
+	for _, name := range strings.Split(output, "\n") {
+		if name = strings.TrimSuffix(name, "\r"); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
 	exists, err := c.HasWindow(ctx, session, window)
 	if err != nil {
@@ -174,21 +178,30 @@ func (c *Client) StartWindowCommand(ctx context.Context, session, window, dir, s
 		}
 	}
 
-	if _, err := c.runner.Run(ctx, c.bin, "new-window", "-d", "-t", SessionTarget(session), "-n", window, "-c", dir); err != nil {
+	args := append([]string{"new-window", "-d", "-t", SessionTarget(session), "-n", window, "-c", dir, "-P", "-F", "#{pane_id}", "--"}, placeholderCommand...)
+	paneID, err := c.runner.Run(ctx, c.bin, args...)
+	if err != nil {
 		return fmt.Errorf("create window %q: %w", window, err)
 	}
-
-	target := WindowTarget(session, window)
-	if err := c.hardenPane(ctx, target, paneTitle); err != nil {
-		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", target)
-		return fmt.Errorf("configure window %q: %w", window, err)
+	if err := c.launch(ctx, strings.TrimSpace(paneID), dir, shell, command, env, paneTitle); err != nil {
+		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", WindowTarget(session, window))
+		return fmt.Errorf("start command in window %q: %w", window, err)
 	}
+	return nil
+}
 
-	payload := buildPayload(command, env)
-	commandLine := shellQuote(shell) + " -lc " + shellQuote(payload)
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", target, commandLine, "C-m"); err != nil {
-		_, _ = c.runner.Run(ctx, c.bin, "kill-window", "-t", target)
-		return fmt.Errorf("start command for workspace window %q: %w", window, err)
+// launch configures a placeholder pane and replaces its process with command.
+// The command is passed to tmux as arguments, so it never goes through the
+// user's interactive shell: its quoting rules, rc files, and history.
+func (c *Client) launch(ctx context.Context, paneID, dir, shell, command string, env map[string]string, paneTitle string) error {
+	if paneID == "" {
+		return fmt.Errorf("tmux did not report the new pane")
+	}
+	if err := c.hardenPane(ctx, paneID, paneTitle); err != nil {
+		return fmt.Errorf("configure pane: %w", err)
+	}
+	if _, err := c.runner.Run(ctx, c.bin, "respawn-pane", "-k", "-t", paneID, "-c", dir, "--", shell, "-lc", buildPayload(command, env)); err != nil {
+		return fmt.Errorf("run command: %w", err)
 	}
 	return nil
 }
@@ -210,7 +223,7 @@ func (c *Client) StopWindow(ctx context.Context, session, window string, timeout
 		return err
 	}
 	for _, pane := range panes {
-		if pane.Dead || (IsShellCommand(pane.Command) && (pane.PID == "" || c.PaneExitedByPID(ctx, pane.PID))) {
+		if c.ProcessExited(ctx, pane) {
 			continue
 		}
 		if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", pane.ID, "C-c"); err != nil {
@@ -260,15 +273,33 @@ func (c *Client) windowProcessesExited(ctx context.Context, session, window stri
 		return false, nil
 	}
 	for _, pane := range panes {
-		if pane.Dead || (IsShellCommand(pane.Command) && (pane.PID == "" || c.PaneExitedByPID(ctx, pane.PID))) {
-			continue
+		if !c.ProcessExited(ctx, pane) {
+			return false, nil
 		}
-		if pane.PID != "" && c.PaneExitedByPID(ctx, pane.PID) {
-			continue
-		}
-		return false, nil
 	}
 	return true, nil
+}
+
+// ProcessExited reports whether a pane's managed process has finished. Direct
+// panes die with their process. Older panes ran it from an interactive shell,
+// so the process finished once that shell is in the foreground with no child.
+func (c *Client) ProcessExited(ctx context.Context, pane PaneInfo) bool {
+	return ProcessExited(pane, func(pid string) bool { return c.PaneExitedByPID(ctx, pid) })
+}
+
+// ProcessExited is the pane exit rule shared with callers that check child
+// processes through another backend.
+func ProcessExited(pane PaneInfo, childless func(pid string) bool) bool {
+	switch {
+	case pane.Dead:
+		return true
+	case pane.Direct:
+		return false
+	case !IsShellCommand(pane.Command):
+		return false
+	default:
+		return pane.PID == "" || childless(pane.PID)
+	}
 }
 
 func (c *Client) SetSessionOption(ctx context.Context, session, key, value string) error {
@@ -310,39 +341,6 @@ func (c *Client) CapturePane(ctx context.Context, session, window string, lines 
 	return output, nil
 }
 
-func (c *Client) PaneCurrentCommand(ctx context.Context, session, window string) (string, error) {
-	// Get the pane PID and check if it has child processes.
-	// send-keys runs commands as children of the pane shell, so if the
-	// shell has no children, the process has exited.
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", WindowTarget(session, window), "-F", "#{pane_pid}")
-	if err != nil {
-		return "", fmt.Errorf("pane pid for %q: %w", window, err)
-	}
-	pid := strings.TrimSpace(output)
-	if i := strings.IndexByte(pid, '\n'); i >= 0 {
-		pid = pid[:i]
-	}
-	if pid == "" {
-		return "", nil
-	}
-	// Check if the pane shell has any child processes.
-	children, err := c.runner.Run(ctx, "pgrep", "-P", pid)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return "shell", nil
-		}
-		return "", fmt.Errorf("check pane process children: %w", err)
-	}
-	if strings.TrimSpace(children) == "" {
-		return "shell", nil
-	}
-	return "running", nil
-}
-
 func (c *Client) Attach(ctx context.Context, session, window, paneID string) error {
 	if _, err := c.runner.Run(ctx, c.bin, "select-window", "-t", WindowTarget(session, window)); err != nil {
 		return fmt.Errorf("select window %q: %w", window, err)
@@ -368,33 +366,30 @@ func (c *Client) Attach(ctx context.Context, session, window, paneID string) err
 	return nil
 }
 
-func (c *Client) SetPaneTitle(ctx context.Context, session, window, title string) error {
-	if err := c.hardenPane(ctx, WindowTarget(session, window), title); err != nil {
-		return fmt.Errorf("set pane title for %q: %w", window, err)
-	}
-	return nil
-}
-
 func (c *Client) SplitWindowCommand(ctx context.Context, session, window, dir, shell, command string, env map[string]string, paneTitle string) error {
-	// Split and capture the new pane ID.
-	paneID, err := c.runner.Run(ctx, c.bin, "split-window", "-d", "-t", WindowTarget(session, window), "-c", dir, "-P", "-F", "#{pane_id}")
+	target := WindowTarget(session, window)
+	// Splitting halves the active pane, so balance the layout around each
+	// split; otherwise a detached 80x24 window has no room after a few panes.
+	c.tileWindow(ctx, target)
+	args := append([]string{"split-window", "-d", "-t", target, "-c", dir, "-P", "-F", "#{pane_id}", "--"}, placeholderCommand...)
+	paneID, err := c.runner.Run(ctx, c.bin, args...)
 	if err != nil {
 		return fmt.Errorf("split window %q: %w", window, err)
 	}
 	paneID = strings.TrimSpace(paneID)
+	c.tileWindow(ctx, target)
 
-	if err := c.hardenPane(ctx, paneID, paneTitle); err != nil {
+	if err := c.launch(ctx, paneID, dir, shell, command, env, paneTitle); err != nil {
 		_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
-		return fmt.Errorf("configure pane %q: %w", paneTitle, err)
-	}
-
-	payload := buildPayload(command, env)
-	commandLine := shellQuote(shell) + " -lc " + shellQuote(payload)
-	if _, err := c.runner.Run(ctx, c.bin, "send-keys", "-t", paneID, commandLine, "C-m"); err != nil {
-		_, _ = c.runner.Run(ctx, c.bin, "kill-pane", "-t", paneID)
-		return fmt.Errorf("start command in pane %q: %w", paneTitle, err)
+		return fmt.Errorf("start %q: %w", paneTitle, err)
 	}
 	return nil
+}
+
+// tileWindow is best effort: a failed layout only matters if a later split
+// lacks space, and that split reports its own error.
+func (c *Client) tileWindow(ctx context.Context, target string) {
+	_, _ = c.runner.Run(ctx, c.bin, "select-layout", "-t", target, "tiled")
 }
 
 // hardenPane configures a pane for reliable identity tracking across
@@ -420,11 +415,14 @@ func (c *Client) hardenPane(ctx context.Context, target, paneTitle string) error
 	if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", "remain-on-exit", "on"); err != nil {
 		return fmt.Errorf("enable remain-on-exit: %w", err)
 	}
+	if _, err := c.runner.Run(ctx, c.bin, "set-option", "-p", "-t", target, "-q", PaneLaunchOptionKey(), directLaunch); err != nil {
+		return fmt.Errorf("mark direct launch: %w", err)
+	}
 	return nil
 }
 
 func (c *Client) ListPanes(ctx context.Context, session, window string) ([]PaneInfo, error) {
-	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", WindowTarget(session, window), "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}")
+	output, err := c.runner.Run(ctx, c.bin, "list-panes", "-t", WindowTarget(session, window), "-F", "#{pane_id}\t#{@wts_process}\t#{pane_title}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}\t#{@wts_launch}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", window, err)
 	}
@@ -438,7 +436,7 @@ func parsePaneList(output string) []PaneInfo {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 6)
+		parts := strings.SplitN(line, "\t", 7)
 		if len(parts) < 4 {
 			continue
 		}
@@ -453,6 +451,9 @@ func parsePaneList(output string) []PaneInfo {
 		}
 		if len(parts) >= 6 {
 			info.Dead = parts[5] == "1"
+		}
+		if len(parts) >= 7 {
+			info.Direct = parts[6] == directLaunch
 		}
 		panes = append(panes, info)
 	}
@@ -508,7 +509,7 @@ func (c *Client) StopPane(ctx context.Context, paneID string, timeout time.Durat
 func (c *Client) paneState(ctx context.Context, paneID string) (pid string, exited bool, err error) {
 	// list-panes -t <pane> expands to every pane in that pane's window. Use
 	// display-message so the format is evaluated for exactly paneID.
-	output, err := c.runner.Run(ctx, c.bin, "display-message", "-p", "-t", paneID, "#{pane_pid}\t#{pane_dead}\t#{pane_current_command}")
+	output, err := c.runner.Run(ctx, c.bin, "display-message", "-p", "-t", paneID, "#{pane_pid}\t#{pane_dead}\t#{pane_current_command}\t#{@wts_launch}")
 	if err != nil {
 		return "", false, err
 	}
@@ -516,16 +517,20 @@ func (c *Client) paneState(ctx context.Context, paneID string) (pid string, exit
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
-	parts := strings.SplitN(line, "\t", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(line, "\t", 4)
+	if len(parts) < 3 {
 		return "", false, fmt.Errorf("unexpected pane state %q", line)
 	}
-	pid = strings.TrimSpace(parts[0])
-	exited = parts[1] == "1"
-	if !exited && IsShellCommand(strings.TrimSpace(parts[2])) {
-		exited = pid == "" || c.PaneExitedByPID(ctx, pid)
+	pane := PaneInfo{
+		ID:      paneID,
+		PID:     strings.TrimSpace(parts[0]),
+		Dead:    parts[1] == "1",
+		Command: strings.TrimSpace(parts[2]),
 	}
-	return pid, exited, nil
+	if len(parts) == 4 {
+		pane.Direct = parts[3] == directLaunch
+	}
+	return pane.PID, c.ProcessExited(ctx, pane), nil
 }
 
 func (c *Client) CapturePaneByID(ctx context.Context, paneID string, lines int) (string, error) {

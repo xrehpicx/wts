@@ -10,6 +10,11 @@ Start or move a process profile or process group to a target worktree.
 'start' is additive: starts the target alongside any already running processes.
 'restart' stops and re-starts the selected process or group.
 
+'start' and 'restart' accept several worktrees to run the same target in each of
+them; 'start --all' uses every available worktree. Every worktree is resolved
+before anything starts. Processes receive WTS_WORKTREE, WTS_WORKTREE_DIR,
+WTS_BRANCH, and WTS_PROCESS, so commands can choose distinct ports.
+
 Process groups are configured in .wts.yaml and each member process still runs in
 its own tmux pane.
 
@@ -29,7 +34,7 @@ wts switch repo-main
 ### Options
 
 ```
-      --attach           attach/focus tmux after command
+      --attach           attach/focus tmux after command (single worktree only)
       --group string     process group name from config
   -h, --help             help for switch
       --process string   process profile name (default: first process in config)

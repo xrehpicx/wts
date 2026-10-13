@@ -59,16 +59,10 @@ func (b *tuiTestBackend) SetSessionOption(_ context.Context, _ string, key, valu
 func (b *tuiTestBackend) GetSessionOption(_ context.Context, _ string, key string) (string, error) {
 	return b.options[key], nil
 }
-func (b *tuiTestBackend) CapturePane(context.Context, string, string, int) (string, error) {
-	return "", nil
-}
-func (b *tuiTestBackend) PaneCurrentCommand(context.Context, string, string) (string, error) {
-	return "", nil
+func (b *tuiTestBackend) ListWindows(context.Context, string) ([]string, error) {
+	return nil, nil
 }
 func (b *tuiTestBackend) Attach(context.Context, string, string, string) error { return nil }
-func (b *tuiTestBackend) SetPaneTitle(context.Context, string, string, string) error {
-	return nil
-}
 func (b *tuiTestBackend) SplitWindowCommand(context.Context, string, string, string, string, string, map[string]string, string) error {
 	return nil
 }
